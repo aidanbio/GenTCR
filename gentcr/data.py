@@ -1084,7 +1084,8 @@ class EpitopeTargetSeqCollator:
                  epitope_seq_mutator=None,
                  target_seq_mutator=None,
                  max_epitope_len=None,
-                 max_target_len=None):
+                 max_target_len=None,
+                 seq_format=None):
         """
         Epitope and target sequence collator
         :param tokenizer: transformers.PreTrainedTokenizer
@@ -1092,6 +1093,7 @@ class EpitopeTargetSeqCollator:
         :param target_seq_mutator: target sequence mutator
         :param max_epitope_len: max length of epitope sequence
         :param max_target_len: max length of target sequence
+        :param seq_format: sequence format string, e.g. '{epitope_seq}{target_seq}'
         """
         self.tokenizer = tokenizer
         self.epitope_seq_mutator = epitope_seq_mutator
