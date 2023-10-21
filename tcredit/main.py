@@ -5,7 +5,7 @@ from peft import LoraConfig, get_peft_model
 import bitsandbytes as bnb
 from transformers import BitsAndBytesConfig
 from transformers import AutoModelForMaskedLM, AutoTokenizer
-from gentcr.data import EpitopeTargetDataset
+from tcredit.data import EpitopeTargetDataset
 
 
 # Logger

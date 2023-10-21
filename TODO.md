@@ -1,5 +1,0 @@
-- Random deletion or substitution of the input sequence
-  - Select random positions to delete or substitute
-  - If necessary, the conserved positions will be selected with higher probability
-  - Substitution is done by a new amino acid selected from the 20 amino acids
-  - If necessary, the similar amino acids will be selected with higher probability

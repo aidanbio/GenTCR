@@ -12,8 +12,8 @@ from collections import OrderedDict
 import re
 from scipy.stats import pearsonr
 
-from gentcr.mhcnc import MHCAlleleName
-from gentcr.common import BaseTest, NumpyUtils, FileUtils, RemoteUtils
+from tcredit.mhcnc import MHCAlleleName
+from tcredit.common import BaseTest, NumpyUtils, FileUtils, RemoteUtils
 
 # Logger
 logger = logging.getLogger('gentcr')

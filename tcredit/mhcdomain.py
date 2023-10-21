@@ -3,8 +3,8 @@ from collections import OrderedDict
 import logging
 import numpy as np
 
-from gentcr.common import BaseTest
-from gentcr.mhcnc import MHCAlleleName
+from tcredit.common import BaseTest
+from tcredit.mhcnc import MHCAlleleName
 
 # Logger
 logger = logging.getLogger('gentcr')

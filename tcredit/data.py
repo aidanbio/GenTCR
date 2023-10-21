@@ -14,10 +14,10 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer
 
-from gentcr.bioseq import IupacAminoAcid, is_valid_aaseq, GAP, UniformAASeqMutator
-from gentcr.mhcdomain import PanMHCIContactDomain
-from gentcr.common import StrEnum, FileUtils, StrUtils, basename, BaseTest
-from gentcr.mhcnc import MHCAlleleName, ALLELE_SEP
+from tcredit.bioseq import IupacAminoAcid, is_valid_aaseq, GAP, UniformAASeqMutator
+from tcredit.mhcdomain import PanMHCIContactDomain
+from tcredit.common import StrEnum, FileUtils, StrUtils, basename, BaseTest
+from tcredit.mhcnc import MHCAlleleName, ALLELE_SEP
 
 # Logger
 logger = logging.getLogger('gentcr')
