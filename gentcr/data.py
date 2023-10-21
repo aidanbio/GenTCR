@@ -14,13 +14,13 @@ import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer
 
-from tcrdesign.bioseq import IupacAminoAcid, is_valid_aaseq, GAP, UniformAASeqMutator
-from tcrdesign.mhcdomain import PanMHCIContactDomain
-from tcrdesign.common import StrEnum, FileUtils, StrUtils, basename, BaseTest
-from tcrdesign.mhcnc import MHCAlleleName, ALLELE_SEP
+from gentcr.bioseq import IupacAminoAcid, is_valid_aaseq, GAP, UniformAASeqMutator
+from gentcr.mhcdomain import PanMHCIContactDomain
+from gentcr.common import StrEnum, FileUtils, StrUtils, basename, BaseTest
+from gentcr.mhcnc import MHCAlleleName, ALLELE_SEP
 
 # Logger
-logger = logging.getLogger('tcrdesign')
+logger = logging.getLogger('gentcr')
 
 
 class EpitopeTargetComponent(IntEnum):

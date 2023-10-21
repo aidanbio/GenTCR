@@ -5,12 +5,12 @@ from peft import LoraConfig, get_peft_model
 import bitsandbytes as bnb
 from transformers import BitsAndBytesConfig
 from transformers import AutoModelForMaskedLM, AutoTokenizer
-from tcrdesign.data import EpitopeTargetDataset
+from gentcr.data import EpitopeTargetDataset
 
 
 # Logger
 logging.config.fileConfig('../config/logging.conf')
-logger = logging.getLogger('tcrdesign')
+logger = logging.getLogger('gentcr')
 
 
 def generate_datasets(args):
@@ -109,7 +109,7 @@ def create_peft_model(args):
 
 
 def main():
-    parser = ArgumentParser('tcrdesign')
+    parser = ArgumentParser('gentcr')
     parser.add_argument('--log_level', type=str, default='DEBUG')
     subparsers = parser.add_subparsers()
 

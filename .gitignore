@@ -11,4 +11,3 @@ __pycache__
 *.log
 lightning_logs
 .pytest_cache
-*.safetensors

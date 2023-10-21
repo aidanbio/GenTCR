@@ -12,11 +12,11 @@ from collections import OrderedDict
 import re
 from scipy.stats import pearsonr
 
-from tcrdesign.mhcnc import MHCAlleleName
-from tcrdesign.common import BaseTest, NumpyUtils, FileUtils, RemoteUtils
+from gentcr.mhcnc import MHCAlleleName
+from gentcr.common import BaseTest, NumpyUtils, FileUtils, RemoteUtils
 
 # Logger
-logger = logging.getLogger('tcrdesign')
+logger = logging.getLogger('gentcr')
 
 
 class IupacAminoAcid(Enum):

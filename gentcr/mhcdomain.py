@@ -3,11 +3,11 @@ from collections import OrderedDict
 import logging
 import numpy as np
 
-from tcrdesign.common import BaseTest
-from tcrdesign.mhcnc import MHCAlleleName
+from gentcr.common import BaseTest
+from gentcr.mhcnc import MHCAlleleName
 
 # Logger
-logger = logging.getLogger('tcrdesign')
+logger = logging.getLogger('gentcr')
 
 class PanMHCIContactDomain(object):
     G_ALPHA1_POS = (24, 89)

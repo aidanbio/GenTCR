@@ -5,7 +5,7 @@ from enum import auto
 
 import numpy as np
 
-from tcrdesign.common import StrEnum, BaseTest, StrUtils
+from gentcr.common import StrEnum, BaseTest, StrUtils
 
 # Logger
 logger = logging.getLogger('epidab')
