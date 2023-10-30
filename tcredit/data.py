@@ -11,7 +11,7 @@ from collections import OrderedDict
 from sklearn.model_selection import train_test_split
 
 import torch
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, TensorDataset, random_split
 from transformers import AutoTokenizer
 
 from tcredit.bioseq import IupacAminoAcid, is_valid_aaseq, GAP, UniformAASeqMutator
@@ -1098,50 +1098,48 @@ class EpitopeTargetSeqCollator:
         self.tokenizer = tokenizer
         self.epitope_seq_mutator = epitope_seq_mutator
         self.target_seq_mutator = target_seq_mutator
-        self.max_epitope_len = max_epitope_len
-        self.max_target_len = max_target_len
+        self.seq_format = seq_format
+        self.max_len = self._get_max_len(max_epitope_len, max_target_len)
 
     def __call__(self, batch):
-        epitope_seqs, target_seqs, labels = list(zip(*batch))
-        collated = OrderedDict()
-        collated['epitope_inputs'] = self.tokenizer(epitope_seqs,
-                                                    padding="max_length",
-                                                    truncation=False,
-                                                    max_length=self.max_epitope_len + 2,  # +2 for [CLS] and [EOS]
-                                                    return_overflowing_tokens=False,
-                                                    return_tensors="pt")
+        seqs = []
+        masked_seqs = []
+        labels = []
+        for epitope_seq, target_seq, label in batch:
+            seqs.append(self.seq_format.format(epitope_seq=epitope_seq, target_seq=target_seq))
+            masked_epitope_seq = self._get_masked_seq(epitope_seq,
+                                                      self.epitope_seq_mutator) if self.epitope_seq_mutator else epitope_seq
+            masked_target_seq = self._get_masked_seq(target_seq,
+                                                     self.target_seq_mutator) if self.target_seq_mutator else target_seq
+            masked_seqs.append(self.seq_format.format(epitope_seq=masked_epitope_seq, target_seq=masked_target_seq))
+            labels.append(label)
 
-        collated['target_inputs'] = self.tokenizer(target_seqs,
-                                                   padding="max_length",
-                                                   truncation=False,
-                                                   max_length=self.max_target_len + 2,  # +2 for [CLS] and [EOS]
-                                                   return_overflowing_tokens=False,
-                                                   return_tensors="pt")
-        if self.epitope_seq_mutator:
-            collated['masked_epitope_inputs'] = self.tokenizer(self._get_masked_seqs(epitope_seqs, seq_mutator=self.epitope_seq_mutator),
-                                                               padding="max_length",
-                                                               truncation=False,
-                                                               max_length=self.max_epitope_len + 2,
-                                                               # +2 for [CLS] and [EOS]
-                                                               return_overflowing_tokens=False,
-                                                               return_tensors="pt")
-        if self.target_seq_mutator:
-            collated['masked_target_inputs'] = self.tokenizer(self._get_masked_seqs(target_seqs, seq_mutator=self.target_seq_mutator),
-                                                              padding="max_length",
-                                                              truncation=False,
-                                                              max_length=self.max_target_len + 2,
-                                                              # +2 for [CLS] and [EOS]
-                                                              return_overflowing_tokens=False,
-                                                              return_tensors="pt")
-        collated['labels'] = torch.tensor(labels)
-        return collated
+        inputs = self.tokenizer(masked_seqs,
+                                padding="max_length",
+                                truncation=False,
+                                max_length=self.max_len,
+                                return_overflowing_tokens=False,
+                                return_tensors="pt")
+        targets = self.tokenizer(seqs,
+                                 padding="max_length",
+                                 truncation=False,
+                                 max_length=self.max_len,
+                                 return_overflowing_tokens=False,
+                                 return_tensors="pt")
+        targets = (torch.tensor(labels), targets)
+        return inputs, targets
 
-    def _get_masked_seqs(self, seqs, seq_mutator):
-        new_seqs = []
-        for seq in seqs:
-            new_seq = ''.join(seq_mutator.mutate(seq)[0])
-            new_seqs.append(new_seq.replace(GAP, self.tokenizer.mask_token))
-        return new_seqs
+    def _get_masked_seq(self, seq, seq_mutator=None):
+        return ''.join(seq_mutator.mutate(seq)[0]).replace(GAP, self.tokenizer.mask_token)
+
+    def _get_max_len(self, max_epitope_len, max_target_len):
+        max_len = 2  # +2 for [CLS] and [EOS]
+        if '{epitope_seq}' in self.seq_format:
+            max_len += max_epitope_len
+        if '{target_seq}' in self.seq_format:
+            max_len += max_target_len
+        max_len += len(self.seq_format.replace('{epitope_seq}', '').replace('{target_seq}', ''))
+        return max_len
 
 
 class BaseDatasetTest(BaseTest):
@@ -1277,84 +1275,135 @@ class EpitopeTargetDatasetTest(BaseDatasetTest):
         self.assertTrue(all(exclude_ds.df[CN.cdr3b_seq].map(lambda x: x not in source_ds.df[CN.cdr3b_seq].values)))
 
 
-class EsmTokenizerTest(BaseDatasetTest):
+class DatasetTestFixture:
+    @classmethod
+    def create_iris_dataset(cls):
+        df = pd.read_csv('../data/iris.csv', dtype={'sepal_length': np.float32,
+                                                    'sepal_width': np.float32,
+                                                    'petal_length': np.float32,
+                                                    'petal_width': np.float32})
+
+        # transform species to numerics
+        df.loc[df.species == 'Iris-setosa', 'species'] = 0
+        df.loc[df.species == 'Iris-versicolor', 'species'] = 1
+        df.loc[df.species == 'Iris-virginica', 'species'] = 2
+        df['species'] = df['species'].astype(np.int32)
+        X = df.values[:, :-1]
+        y = df.values[:, -1]
+        return TensorDataset(torch.tensor(X, dtype=torch.float32),
+                             torch.tensor(y, dtype=torch.long))
+
+    @classmethod
+    def create_data_loader(cls, key, batch_size=64, shuffle=False, n_workers=None, val_size=None):
+        if key == 'iris':
+            ds = cls.create_iris_dataset()
+            if val_size:
+                n_data = len(ds)
+                train_ds, val_ds = random_split(ds, [int(n_data * (1 - val_size)), int(n_data * val_size)])
+                return (DataLoader(train_ds, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers),
+                        DataLoader(val_ds, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers))
+            else:
+                return DataLoader(ds, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers)
+        elif key == 'epitope_target':
+            ds = EpitopeTargetDataset.from_key('immunecode')
+            plm_name_or_path = '../output/peft_esm2_t33_650M_UR50D'
+            tokenizer = AutoTokenizer.from_pretrained(plm_name_or_path)
+            seq_mutator = UniformAASeqMutator(mut_ratio=0.2, mut_probs=(1, 0))
+            collator = EpitopeTargetSeqCollator(tokenizer=tokenizer,
+                                                epitope_seq_mutator=None,
+                                                target_seq_mutator=seq_mutator,
+                                                max_epitope_len=ds.max_epitope_len,
+                                                max_target_len=ds.max_target_len,
+                                                seq_format='{epitope_seq}{target_seq}')
+            if val_size:
+                train_ds, val_ds = ds.train_test_split(test_size=val_size)
+                return (DataLoader(train_ds, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers,
+                                   collate_fn=collator),
+                        DataLoader(val_ds, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers,
+                                   collate_fn=collator))
+            else:
+                return DataLoader(ds, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers,
+                                  collate_fn=collator)
+
+
+class EpitopeTargetDSDataLoaderTest(EpitopeTargetDatasetTest):
     def setUp(self):
         super().setUp()
-        self.plm_name_or_path = '../output/peft_esm2_t33_650M_UR50D'
-        self.tokenizer = AutoTokenizer.from_pretrained(self.plm_name_or_path)
-
-    def test_mask_token(self):
-        seq = 'ACDEF' + self.tokenizer.mask_token + 'HIKLMN.QRSTVWY'
-        inputs = self.tokenizer.encode(seq, return_tensors='pt')
-        print(inputs)
-
-
-class DataLoaderWithCollatorTest(BaseDatasetTest):
-    def setUp(self):
-        super().setUp()
-
         EpitopeTargetDataset.FN_DATA_CONFIG = '../config/data-test.json'
-        self.ds = EpitopeTargetDataset.from_key('immunecode')
-        self.plm_name_or_path = '../output/peft_esm2_t33_650M_UR50D'
-        self.tokenizer = AutoTokenizer.from_pretrained(self.plm_name_or_path)
-        self.seq_mutator = UniformAASeqMutator(mut_ratio=0.2, mut_probs=(0.7, 0.3))
-        self.collator = EpitopeTargetSeqCollator(tokenizer=self.tokenizer,
-                                                 epitope_seq_mutator=self.seq_mutator,
-                                                 target_seq_mutator=self.seq_mutator,
-                                                 max_epitope_len=self.ds.max_epitope_len,
-                                                 max_target_len=self.ds.max_target_len)
         self.batch_size = 64
+        self.data_loader = DatasetTestFixture.create_data_loader('epitope_target',
+                                                                 batch_size=self.batch_size,
+                                                                 shuffle=False,
+                                                                 n_workers=1)
         self.real_batch_sizes = [self.batch_size] * (len(self.ds) // self.batch_size) + [len(self.ds) % self.batch_size]
-        # self.data_loader = DataLoader(self.ds, batch_size=self.batch_size, shuffle=False, collate_fn=self.collator)
 
+    @property
+    def ds(self):
+        return self.data_loader.dataset
+
+    @property
+    def collator(self):
+        return self.data_loader.collate_fn
+
+    @property
+    def tokenizer(self):
+        return self.data_loader.collate_fn.tokenizer
+
+    @property
     def first_batch(self):
-        return next(iter(self.create_data_loader()))
+        return next(iter(self.data_loader))
 
-    def create_data_loader(self):
-        return DataLoader(self.ds, batch_size=self.batch_size, shuffle=False, collate_fn=self.collator)
+    def assert_batch(self, batch_idx, batch):
+        mut_ratio = 0.2
+        mut_probs = (1, 0)
+        self.collator.epitope_seq_mutator = None
+        self.collator.target_seq_mutator.mut_ratio = mut_ratio
+        self.collator.target_seq_mutator.mut_probs = mut_probs
 
-    def assert_batch_with_collator(self, i, batch):
-        cur_batch_size = self.real_batch_sizes[i]
-        epitope_inputs = batch['epitope_inputs']
-        target_inputs = batch['target_inputs']
-        labels = batch['labels']
+        cur_batch_size = self.real_batch_sizes[batch_idx]
+        expected_shape = (cur_batch_size, self.collator.max_len)
+        inputs, targets = batch
+        targets = targets[1]
+        input_ids, input_attention_mask = inputs['input_ids'], inputs['attention_mask']
+        target_ids, target_attention_mask = targets['input_ids'], targets['attention_mask']
+        begin = batch_idx * self.batch_size
+        end = (batch_idx + 1) * self.batch_size
+        epitope_seqs = self.ds.df[CN.epitope_seq].values[begin:end]
+        target_seqs = self.ds.df[CN.cdr3b_seq].values[begin:end]
 
-        input_ids, attention_mask = epitope_inputs['input_ids'], epitope_inputs['attention_mask']
-        decoded_seqs = self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+        self.assertEqual(expected_shape, input_ids.shape)
+        self.assertEqual(expected_shape, input_attention_mask.shape)
+        self.assertEqual(expected_shape, target_ids.shape)
+        self.assertEqual(expected_shape, target_attention_mask.shape)
+
+        mask_token_id = self.tokenizer.mask_token_id
+        for i in range(cur_batch_size):
+            expected_n_masks = round(len(target_seqs[i]) * mut_ratio)
+            self.assertTrue(sum(input_ids[i] == mask_token_id) == expected_n_masks)
+            self.assertArrayEqual(input_attention_mask[i], (input_ids[i] != self.tokenizer.pad_token_id).int())
+            self.assertArrayEqual(target_attention_mask[i], (target_ids[i] != self.tokenizer.pad_token_id).int())
+
+        for i in range(cur_batch_size):
+            cur_input_ids = copy.deepcopy(input_ids[i])
+            cur_target_ids = target_ids[i]
+            for j in range(cur_input_ids.shape[0]):
+                if cur_input_ids[j] == mask_token_id:
+                    cur_input_ids[j] = cur_target_ids[j]
+            self.assertArrayEqual(cur_input_ids, cur_target_ids)
+
+        decoded_seqs = self.tokenizer.batch_decode(target_ids, skip_special_tokens=True)
         decoded_seqs = list(map(lambda seq: StrUtils.rm_nonwords(seq), decoded_seqs))
-        begin = i * self.batch_size
-        end = (i + 1) * self.batch_size
-        expected_max_len = self.ds.max_epitope_len + 2
-        self.assertEqual(input_ids.shape, (cur_batch_size, expected_max_len))
-        self.assertListEqual(self.ds.df[CN.epitope_seq].values[begin:end].tolist(), decoded_seqs)
-        self.assertEqual(attention_mask.shape, (cur_batch_size, expected_max_len))
-        for j in range(cur_batch_size):
-            self.assertTrue(all(attention_mask[j] == (input_ids[j] != self.tokenizer.pad_token_id)))
-        self.assertEqual(labels.shape, (cur_batch_size,))
-        self.assertTrue(all([label in (torch.tensor(0), torch.tensor(1)) for label in labels]))
+        expected_seqs = [self.collator.seq_format.format(epitope_seq=e_seq, target_seq=t_seq)
+                         for e_seq, t_seq in zip(epitope_seqs, target_seqs)]
+        self.assertArrayEqual(expected_seqs, decoded_seqs)
 
-        input_ids, attention_mask = target_inputs['input_ids'], target_inputs['attention_mask']
-        decoded_seqs = self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)
-        decoded_seqs = list(map(lambda seq: StrUtils.rm_nonwords(seq), decoded_seqs))
-        begin = i * self.batch_size
-        end = (i + 1) * self.batch_size
-        expected_max_len = self.ds.max_target_len + 2
-        self.assertEqual(input_ids.shape, (cur_batch_size, expected_max_len))
-        self.assertListEqual(self.ds.df[CN.cdr3b_seq].values[begin:end].tolist(), decoded_seqs)
-        self.assertEqual(attention_mask.shape, (cur_batch_size, expected_max_len))
-        for j in range(cur_batch_size):
-            self.assertTrue(all(attention_mask[j] == (input_ids[j] != self.tokenizer.pad_token_id)))
-
-        self.assertEqual(labels.shape, (cur_batch_size,))
-        self.assertTrue(all([label in (torch.tensor(0), torch.tensor(1)) for label in labels]))
-
-    def test_batch_with_collator(self):
-        self.assert_batch_with_collator(0, self.first_batch())
+    def test_a_batch(self):
+        self.assert_batch(0, self.first_batch)
 
     def test_all_batches(self):
-        for i, batch in enumerate(self.create_data_loader()):
+        for i, batch in enumerate(self.data_loader):
             print(f'>>>batch: {i}, batch_size: {self.real_batch_sizes[i]}')
-            self.assert_batch_with_collator(i, batch)
+            self.assert_batch(i, batch)
 
 
 if __name__ == '__main__':

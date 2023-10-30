@@ -2,7 +2,6 @@
 data
 old
 tmp
-snippets
 __pycache__
 .DS_Store
 .*.swp
