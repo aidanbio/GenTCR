@@ -230,7 +230,7 @@ class BaseLitModel(pl.LightningModule):
     #     return self.head(output)
 
 
-class BERTLitModel(BaseLitModel):
+class BertMLMLitModel(pl.LightningModule):
     class LabelPredictionHead(BaseLitModel.BasePredictionHead):
         def __init__(self,
                      metrics=['accuracy'],
@@ -415,160 +415,91 @@ class BERTLitModel(BaseLitModel):
                     self.label_head.output_labels(output[1]))
 
     def __init__(self, train_config=None):
-        super().__init__(train_config=train_config)
-        # if self.bert_config.joint_io_weights and self.token_head is not None:
-        #     self.bert._tie_or_clone_weights(self.token_head.decoder, self.bert.embeddings.word_embeddings)
+        super().__init__()
+        self.mlm = AutoModelForMaskedLM.from_pretrained(train_config['mlm_name_or_path'])
+        self.train_config = train_config
+        self.loss_fn = nn.NLLLoss(ignore_index=self.mlm_config.pad_token_id)
 
     @property
-    def bert(self):
-        return self.backbone
+    def mlm_config(self):
+        return self.mlm.config
 
     @property
-    def bert_config(self):
-        return self.bert.config
+    def mlm_head(self):
+        return self.mlm.lm_head
 
-    @property
-    def token_head(self):
-        if isinstance(self.head, BERTLitModel.TokenPredictionHead):
-            return self.head
-        elif isinstance(self.head, BERTLitModel.BalancedPredictionHead):
-            return self.head.token_head
-        else:
-            return None
-
-    @property
-    def label_head(self):
-        if isinstance(self.head, BERTLitModel.LabelPredictionHead):
-            return self.head
-        elif isinstance(self.head, BERTLitModel.BalancedPredictionHead):
-            return self.head.label_head
-        else:
-            return None
-
-    # Checkpoint hooks
-    # def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
-    #     sd = checkpoint['state_dict'] if 'state_dict' in checkpoint else checkpoint
-    #     CollectionUtils.update_dict_key_prefix(sd, source_prefix='bert.', target_prefix='backbone.')
-    #
-    # def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
-    #     sd = checkpoint['state_dict'] if 'state_dict' in checkpoint else checkpoint
-    #     CollectionUtils.update_dict_key_prefix(sd, source_prefix='backbone.', target_prefix='bert.', )
+    def configure_optimizers(self):
+        config = OrderedDict()
+        config['optimizer'] = self._create_optimizer()
+        if 'lr_scheduler' in self.train_config:
+            lr_scheduler = self._create_lr_scheduler(config['optimizer'], self.train_config['lr_scheduler'])
+            config['lr_scheduler'] = {
+                'scheduler': lr_scheduler
+            }
+        logger.info(f'Configured optimizer and lr_scheduler: {config}')
+        return config
 
     def clone(self):
-        the = BERTLitModel(train_config=copy.deepcopy(self.train_config))
+        the = BertMLMLitModel(train_config=copy.deepcopy(self.train_config))
         the.load_state_dict(self.state_dict())
         the.to(self.device)
         return the
 
-    # For freeze and melt bert encoders
-    def freeze_bert(self):
-        self.freeze_backbone()
+    def training_step(self, batch, batch_idx):
+        return self._loss_log(batch, log_prefix='train')
 
-    def melt_bert(self):
-        self.melt_backbone()
-
-    # def train_bert_encoders(self, layer_range=(-2, None)):
-    #     self.freeze_bert()
-    #
-    #     # Melt bert embeddings
-    #     for param in self.bert.embeddings.parameters():
-    #         param.requires_grad = True
-    #
-    #     # Melt target encoder layers and pooler
-    #     for layer in self.bert.encoder.layer[layer_range[0]:layer_range[1]]:
-    #         for param in layer.parameters():
-    #             param.requires_grad = True
-    #
-    #     for param in self.bert.pooler.parameters():
-    #         param.requires_grad = True
+    def validation_step(self, batch, batch_idx):
+        return self._loss_metric_scores(batch, log_prefix='val')
 
     def forward(self, input):
-        # bert_out: # sequence_output, pooled_output, (hidden_states), (attentions)
-        bert_out = self.bert(**input)
+        # mlm_out: MaskedLMOutput, (loss), logits, (hidden_states), (attentions)
+        # logits.shape: (batch_size, input_len, vocab_size)
+        mlm_out = self.mlm(**input)
+        output = (F.log_softmax(mlm_out.logits, dim=-1),)
+        if mlm_out.hidden_states is not None:
+            output += (mlm_out.hidden_states,)
+        if mlm_out.attentions is not None:
+            output += (mlm_out.attentions,)
+        return output
 
-        # sequence_out.shape: (batch_size, input_len, hidden_size), pooled_out.shape: (batch_size, hidden_size)
-        sequence_out, pooled_out = bert_out[:2]
-        output = self.head(sequence_out, pooled_out)
-        return output + bert_out[2:] if isinstance(output, tuple) else (output,) + bert_out[2:]
+    def _create_optimizer(self):
+        params = copy.deepcopy(self.train_config['optimizer'])
+        return eval(params.pop('type'))(self.parameters(), **params)
 
-    # def load_bert(self, ckpt_path, bert_prefix='bert.'):
-    #     sd = TorchUtils.load_state_dict(ckpt_path, prefix=bert_prefix)
-    #     assert sd.keys() == self.bert.state_dict().keys(), 'There are mismatched bert key(s)'
-    #     self.bert.load_state_dict(sd)
+    def _create_lr_scheduler(self, optimizer, params):
+        params = copy.deepcopy(params)
+        tname = params.pop('type')
+        if 'warmup' in tname:
+            n_train_steps = self.trainer.estimated_stepping_batches
+            steps_per_epoch = n_train_steps // self.trainer.max_epochs
+            warmup_epochs = float(params.pop('warmup_epochs'))
+            warmup_steps = int(warmup_epochs * steps_per_epoch)
+            if tname == 'warmup_constant':
+                return get_constant_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps)
+            elif tname == 'warmup_linear':
+                return get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps,
+                                                       num_training_steps=n_train_steps)
+            elif tname == 'warmup_cosine':
+                return get_cosine_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps,
+                                                       num_training_steps=n_train_steps)
+            elif tname == 'warmup_poly':
+                return get_polynomial_decay_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps,
+                                                                 num_training_steps=n_train_steps)
+            elif tname == 'warmup_cosine_hard_restarts':
+                return get_cosine_with_hard_restarts_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps,
+                                                                          num_training_steps=n_train_steps)
+        else:
+            raise ValueError(f'Unknown lr_scheduler: {tname}')
 
-    def _create_backbone(self):
-        bert_name_or_path = self.train_config.get('bert_name_or_path', 'bert-base-uncased')
-        bert = AutoModelForMaskedLM.from_pretrained(bert_name_or_path)
-        return bert
-
-    def _create_head(self):
-        params = copy.deepcopy(self.train_config['head'])
-        params['bert_config'] = self.bert_config
-        return eval(params.pop('type'))(**params)
-
-    # @classmethod
-    # def from_pretrained_bert(cls, train_config, bert_path, ckpt_path=None, bert_prefix='bert.'):
-    #     bert_config = ProteinConfig.from_pretrained(bert_path)
-    #     model = BERTLitModel(train_config=train_config, bert_config=bert_config)
-    #     model.load_bert(ckpt_path=ckpt_path if ckpt_path else f'{bert_path}/pytorch_model.bin', bert_prefix=bert_prefix)
-    #     return model
+    def _loss_log(self, batch, log_prefix=None):
+        input, target = batch
+        output = self(input)
+        loss = self.loss_fn(output[0].transpose(1, 2), target[1]['input_ids'])
+        self.log(f'{log_prefix}.loss', loss, prog_bar=True, rank_zero_only=True, sync_dist=True)
+        return {'loss': loss}
 
 
-class BaseLitModelTest(BaseDatasetTest):
-    class TestModel(BaseLitModel):
-        class PredictionHead(BaseLitModel.BasePredictionHead):
-            def __init__(self, metrics=['accuracy']):
-                super().__init__(metrics=metrics)
-                self.predictor = nn.Softmax(dim=1)
-                self.loss_fn = nn.CrossEntropyLoss()
-
-            def forward(self, input):
-                return self.predictor(input)
-
-            def loss(self, output, target):
-                return self.loss_fn(output, target)
-
-            def score_map(self, output, target):
-                y_true = target
-                y_pred, y_prob = self.output_labels(output)
-                # logger.info(f'PredictionEvaluator.score_map: y_true: {y_true}, y_pred: {y_pred}, y_prob: {y_prob}')
-                score_map = OrderedDict()
-                for metric, scorer in self.scorer_map.items():
-                    score_map[metric] = scorer(y_true, y_pred, y_prob, n_classes=y_prob.shape[1])
-
-                logger.debug('score_map: %s' % score_map)
-                return score_map
-
-            def output_labels(self, output):
-                labels = torch.argmax(output, dim=1)
-                return labels, output
-
-        def __init__(self, train_config):
-            super().__init__(train_config=train_config)
-
-        def forward(self, x):
-            out = x
-            for layer in self.backbone:
-                out = layer(out)
-            return self.head(out)
-
-        def clone(self):
-            c = BaseLitModelTest.TestModel(train_config=copy.deepcopy(self.train_config))
-            sd = self.state_dict()
-            c.load_state_dict(sd)
-            c.to(self.device)
-            return c
-
-        def _create_backbone(self):
-            return nn.ModuleList([
-                nn.Linear(4, 100),
-                nn.Linear(100, 100),
-                nn.Linear(100, 3)
-            ])
-
-        # def _create_head(self, kwargs):
-        #     return super()._create_head()
-
+class BertMLMLitModelTest(BaseDatasetTest):
     def setUp(self):
         super().setUp()
 
@@ -583,11 +514,6 @@ class BaseLitModelTest(BaseDatasetTest):
         self.train_data_loader, self.val_data_loader = self.create_train_val_data_loader()
         self.test_data_loader = [self.val_data_loader, self.val_data_loader]
 
-    def create_train_val_data_loader(self):
-        return DatasetTestFixture.create_data_loader('iris',
-                                                     batch_size=self.batch_size,
-                                                     n_workers=1,
-                                                     val_size=self.val_size)
     @property
     def train_ds(self):
         return self.train_data_loader.dataset
@@ -596,42 +522,45 @@ class BaseLitModelTest(BaseDatasetTest):
     def val_ds(self):
         return self.val_data_loader.dataset
 
-    @property
-    def first_batch(self):
-        batch = next(iter(self.train_data_loader))
-        return TorchUtils.collection_to(batch, self.device)
+    def create_train_val_data_loader(self):
+        return DatasetTestFixture.create_data_loader('epitope_target',
+                                                     batch_size=self.batch_size,
+                                                     n_workers=1,
+                                                     val_size=self.val_size)
 
-    def create_train_config(self):
-        return {
-            "head": {
-                "type": "BaseLitModelTest.TestModel.PredictionHead",
-                "metrics": ["f1", "auroc"]
-            },
-            "optimizer": {
-                "type": "torch.optim.AdamW",
-                "lr": 0.001
-            },
-            "lr_scheduler": {
-                "type": "warmup_poly",
-                "warmup_epochs": 0.0125,
-                "n_train_steps": 10
-            },
-        }
+    @property
+    def collator(self):
+        return self.train_data_loader.collate_fn
+
+    @property
+    def tokenizer(self):
+        return self.train_data_loader.collate_fn.tokenizer
 
     def create_model(self):
-        model = self.TestModel(train_config=self.train_config)
+        model = BertMLMLitModel(train_config=self.train_config)
         model.to(self.device)
         return model
 
-    def assert_model_output(self, output, batch_size):
-        expected = (batch_size, 3)
-        self.assertEqual(expected, output.shape)
+    def create_train_config(self):
+        return {
+            "mlm_name_or_path": "../output/peft_esm2_t33_650M_UR50D",
+            "optimizer": {
+                "type": "torch.optim.AdamW",
+                "lr": 0.001,
+            },
+            "lr_scheduler": {
+                "type": "warmup_poly",
+                "warmup_epochs": 0.0125
+            },
+        }
 
-    def assert_head_output_labels(self, output_labels=None, batch_size=None):
-        labels, probs = output_labels
-        self.assertEqual((batch_size,), labels.shape)
-        self.assertEqual((batch_size, 3), probs.shape)
-        self.assertAlmostEqual(batch_size, torch.sum(probs).item(), delta=3)
+    @property
+    def first_batch(self):
+        batch = next(iter(self.train_data_loader))
+        input, target = batch
+        input = input.to(self.device)
+        target = (target[0].to(self.device), target[1].to(self.device))
+        return input, target
 
     def state_dict_equal(self, st1, st2):
         return TorchUtils.equal_state_dict(st1, st2)
@@ -647,7 +576,6 @@ class BaseLitModelTest(BaseDatasetTest):
         args.strategy = ('ddp_spawn' if n_gpus > 0 else None)
         args.num_nodes = None
         args.precision = 16
-        print(f'>>>trainer_args:{args}')
         return args
 
     # Tests
@@ -661,46 +589,11 @@ class BaseLitModelTest(BaseDatasetTest):
     def test_forward(self):
         input, target = self.first_batch
         output = self.model(input)
-        self.assert_model_output(output, batch_size=self.batch_size)
-
-    def test_prediction_head(self):
-        input, target = self.first_batch
-        head = self.model.head
-        output = self.model(input)
-        self.assert_model_output(output, batch_size=self.batch_size)
-        self.assert_head_output_labels(head.output_labels(output), batch_size=self.batch_size)
-
-        loss = head.loss(output, target)
-        self.assertIsNotNone(loss)
-        self.assertTrue(TypeUtils.is_numeric_value(loss.item()))
-
-        sm = head.score_map(output, target)
-        self.assertSetEqual(set(head.metrics), set(sm.keys()))
-        self.assertTrue(all(map(lambda x: x >= 0 and x <= 1, sm.values())))
-
-    def test_change_metrics_of_head(self):
-        input, target = self.first_batch
-        head = self.model.head
-        output = self.model(input)
-
-        self.assert_model_output(output, batch_size=self.batch_size)
-        self.assert_head_output_labels(head.output_labels(output), batch_size=self.batch_size)
-
-        sm = head.score_map(output, target)
-        self.assertSetEqual(set(head.metrics), set(sm.keys()))
-        self.assertTrue(all(map(lambda x: x >= 0 and x <= 1, sm.values())))
-
-        old_metrics = head.metrics
-        metrics = ['f1', 'recall', 'precision']
-        head.init_scorer_map(metrics=metrics)
-
-        sm = head.score_map(output, target)
-        self.assertSetEqual(set(metrics), set(head.metrics))
-        self.assertSetEqual(set(head.metrics), set(sm.keys()))
-        self.assertTrue(all(map(lambda x: x >= 0 and x <= 1, sm.values())))
+        logits = output[0]
+        expected = (self.batch_size, self.collator.max_len, self.tokenizer.vocab_size)
+        self.assertEqual(expected, logits.shape)
 
     def test_fit(self):
-        logger.info('>>>test_fit')
         old_model = self.model.clone()
         old_model.to(self.device)
         self.assertTrue(self.state_dict_equal(old_model.state_dict(), self.model.state_dict()))
@@ -711,7 +604,7 @@ class BaseLitModelTest(BaseDatasetTest):
                              strategy=args.strategy,
                              num_nodes=args.num_nodes,
                              precision=args.precision,
-                             max_epochs=10,
+                             max_epochs=3,
                              enable_checkpointing=False)
 
         trainer.fit(self.model, train_dataloaders=self.train_data_loader, val_dataloaders=self.val_data_loader)
@@ -760,183 +653,6 @@ class BaseLitModelTest(BaseDatasetTest):
             for metric in head.metrics:
                 self.assertEqual(len(list(filter(lambda key: metric in key, output_map.keys()))), 1)
 
-    # def test_predict(self):
-    #     args = self.get_trainer_args()
-    #     trainer = pl.Trainer(accelerator=args.accelerator,
-    #                          devices=args.devices,
-    #                          strategy=args.strategy,
-    #                          num_nodes=args.num_nodes,
-    #                          precision=args.precision,
-    #                          max_epochs=1,
-    #                          enable_checkpointing=False)
-    #     trainer.fit(self.model, train_dataloaders=self.train_data_loader, val_dataloaders=self.val_data_loader)
-    #
-    #     data_loader = self.train_data_loader
-    #     outputs = trainer.predict(self.model, dataloaders=data_loader)
-    #
-    #     self.assertEqual(len(data_loader), len(outputs))
-    #     head = self.model.head
-    #     for i, (input, target) in enumerate(data_loader):
-    #         if isinstance(input, list) or isinstance(input, tuple):
-    #             batch_size = input[0].shape[0]
-    #         else:
-    #             batch_size = input.shape[0]
-    #         self.assert_model_output(outputs[i], batch_size=batch_size)
-    #         self.assert_head_output_labels(head.output_labels(outputs[i]), batch_size=batch_size)
-
-
-class BERTLitModelTest(BaseLitModelTest):
-    bert_path = '../output/peft_esm2_t33_650M_UR50D'
-
-    def setUp(self):
-        super().setUp()
-
-    def create_train_val_data_loader(self):
-        return DatasetTestFixture.create_data_loader('epitope_target',
-                                                     batch_size=self.batch_size,
-                                                     n_workers=1,
-                                                     val_size=self.val_size)
-
-    @property
-    def collator(self):
-        return self.train_data_loader.collate_fn
-
-    @property
-    def tokenizer(self):
-        return self.train_data_loader.collate_fn.tokenizer
-
-    def create_model(self):
-        model = BERTLitModel(train_config=self.train_config)
-        model.to(self.device)
-        return model
-
-    def create_train_config(self):
-        return {
-            "bert_name_or_path": self.bert_path,
-            "head": {
-                "type": "BERTLitModel.BalancedPredictionHead",
-                "metrics": ["f1", "auroc"],
-                "use_first_token": False,
-                "input_len": 48,
-                "n_labels": 2,
-                "lamda": 0.5
-            },
-            "optimizer": {
-                "type": "torch.optim.AdamW",
-                "lr": 0.001,
-            },
-            "lr_scheduler": {
-                "type": "warmup_poly",
-                "warmup_epochs": 0.0125
-            },
-        }
-
-    def assert_model_output(self, output, batch_size):
-        token_out, label_out, hidden_states, attentions = output
-        input_len = self.train_ds.max_len
-        vocab_size = self.train_ds.vocab_size
-        self.assertEqual((batch_size, input_len, vocab_size), token_out.shape)
-        self.assertEqual((batch_size, 2), label_out.shape)
-
-        n_encoders = self.model.bert_config.num_hidden_layers
-        self.assertEqual(n_encoders, len(hidden_states) - 1)  # First hstate is for embedding
-        self.assertEqual(n_encoders, len(attentions))
-
-        hidden_size = self.model.bert_config.hidden_size
-        n_heads = self.model.bert_config.num_attention_heads
-        expected_hstate_shape = (batch_size, input_len, hidden_size)
-        expected_attn_shape = (batch_size, n_heads, input_len, input_len)
-
-        self.assertTrue(all([expected_hstate_shape == hstate.shape for hstate in hidden_states[1:]]))
-        self.assertTrue(all([expected_attn_shape == attn.shape for attn in attentions]))
-
-    def assert_head_output_labels(self, output_labels=None, batch_size=None):
-        token_out, label_out = output_labels
-        self._assert_token_head_output_labels(token_out, batch_size=batch_size)
-        self._assert_label_head_output_labels(label_out, batch_size=batch_size)
-
-    def _assert_token_head_output_labels(self, output_labels, batch_size):
-        labels, probs = output_labels
-        input_len = self.train_ds.max_len
-        vocab_size = self.train_ds.vocab_size
-        self.assertEqual((batch_size, input_len), labels.shape)
-        self.assertEqual((batch_size, input_len, vocab_size), probs.shape)
-        for i in range(input_len):
-            self.assertAlmostEqual(batch_size, torch.sum(probs[:, i]).item(), delta=3)
-
-    def _assert_label_head_output_labels(self, output_labels, batch_size):
-        labels, probs = output_labels
-        self.assertEqual((batch_size,), labels.shape)
-        self.assertEqual((batch_size, 2), probs.shape)
-        self.assertAlmostEqual(batch_size, torch.sum(probs).item(), delta=3)
-
-    @property
-    def first_batch(self):
-        batch = next(iter(self.train_data_loader))
-        input, target = batch
-        input = input.to(self.device)
-        target = (target[0].to(self.device), target[1].to(self.device))
-        return input, target
-
-    def test_prediction_head(self):
-        config = self.train_config['head']
-        self.assertTrue(isinstance(self.model.head, BERTLitModel.BalancedPredictionHead))
-        self.assertTrue(isinstance(self.model.head.token_head, BERTLitModel.TokenPredictionHead))
-        self.assertTrue(isinstance(self.model.head.label_head, BERTLitModel.LabelPredictionHead))
-        self.assertTrue(isinstance(self.model.head.label_head.predictor, nn.Linear))
-        expected_weight_shape = (config['n_labels'], (config['input_len'] - 2) * self.model.bert_config.hidden_size)
-        self.assertEqual(expected_weight_shape, self.model.head.label_head.predictor.weight.shape)
-        super().test_prediction_head()
-
-        # Only TokenPredictionHead
-        self.train_config['head'] = {
-            "type": "BERTLitModel.BalancedPredictionHead",
-            "metrics": ["f1", "auroc"],
-            "use_first_token": False,
-            "input_len": 48,
-            "lamda": 1
-        }
-        self.model = self.create_model()
-        self.assertTrue(isinstance(self.model.head, BERTLitModel.BalancedPredictionHead))
-        self.assertTrue(isinstance(self.model.head.token_head, BERTLitModel.TokenPredictionHead))
-        self.assertTrue(isinstance(self.model.head.label_head, BERTLitModel.LabelPredictionHead))
-        self.assertTrue(isinstance(self.model.head.label_head.predictor, nn.Linear))
-        self.assertEqual((2, 46 * self.model.bert_config.hidden_size),
-                         self.model.head.label_head.predictor.weight.shape)
-        super().test_prediction_head()
-
-        # Only LabelPredictionHead
-        self.train_config['head'] = {
-            "type": "BERTLitModel.BalancedPredictionHead",
-            "metrics": ["f1", "auroc"],
-            "predictor": "msp",
-            "use_first_token": False,
-            "input_len": 48,
-            "dropout": 0.2,
-            "lamda": 0
-        }
-        self.model = self.create_model()
-        self.assertTrue(isinstance(self.model.head, BERTLitModel.BalancedPredictionHead))
-        self.assertTrue(isinstance(self.model.head.token_head, BERTLitModel.TokenPredictionHead))
-        self.assertTrue(isinstance(self.model.head.label_head, BERTLitModel.LabelPredictionHead))
-        self.assertTrue(isinstance(self.model.head.label_head.predictor, SimpleMLP))
-        super().test_prediction_head()
-
-    def test_fit(self):
-        print(self.model)
-        super().test_fit()
-
-        self.train_config['head'] = {
-            "type": "BERTLitModel.BalancedPredictionHead",
-            "metrics": ["f1", "auroc"],
-            "use_first_token": False,
-            "input_len": 48,
-            "lamda": 0.3
-        }
-        self.model = self.create_model()
-        print(self.model)
-        super().test_fit()
-
     def _test_load_bert(self, ckpt_path):
         old_model = self.model.clone()
         old_model.to(self.device)
@@ -962,7 +678,7 @@ class BERTLitModelTest(BaseLitModelTest):
         expected_bert_sd = OrderedDict({k: expected_sd[k] for k in bert_keys})
 
         model = BERTLitModel.load_from_checkpoint(ckpt_path,
-                                                  bert_config=self.model.bert_config,
+                                                  bert_config=self.model.mlm_config,
                                                   train_config=self.train_config,
                                                   strict=False)
         model.to(self.device)
@@ -978,129 +694,12 @@ class BERTLitModelTest(BaseLitModelTest):
 
         ckpt_path = '../output/exp1/V3/pretrain.2.3/pretrain.2.3.best_model.ckpt'
         model = BERTLitModel.load_from_checkpoint(ckpt_path,
-                                                  bert_config=self.model.bert_config,
+                                                  bert_config=self.model.mlm_config,
                                                   train_config=self.train_config,
                                                   strict=False)
         other = BERTLitModel.from_pretrained_bert(self.train_config, ckpt_path=ckpt_path, bert_path=self.bert_path)
         self.assertEqual(model.bert.state_dict().keys(), other.bert.state_dict().keys())
         self.assertTrue(self.module_weights_equal(model.bert, other.bert))
-
-    def test_train_bert_encoders(self):
-        layer_range = [-4, None]
-
-        for param in self.model.parameters():
-            self.assertTrue(param.requires_grad)
-
-        self.model.train_bert_encoders(layer_range=layer_range)
-
-        for param in self.model.bert.embeddings.parameters():
-            self.assertTrue(param.requires_grad)
-
-        for layer in self.model.bert.encoder.layer[0:-4]:
-            for param in layer.parameters():
-                self.assertFalse(param.requires_grad)
-
-        for layer in self.model.bert.encoder.layer[-4:None]:
-            for param in layer.parameters():
-                self.assertTrue(param.requires_grad)
-
-        for param in self.model.bert.pooler.parameters():
-            self.assertTrue(param.requires_grad)
-
-        for param in self.model.head.parameters():
-            self.assertTrue(param.requires_grad)
-
-        old_model = self.model.clone()
-
-        args = self.get_trainer_args()
-        trainer = Trainer(accelerator=args.accelerator,
-                          devices=args.devices,
-                          strategy=args.strategy,
-                          num_nodes=args.num_nodes,
-                          amp_backend=args.amp_backend,
-                          precision=args.precision,
-                          max_epochs=1,
-                          enable_checkpointing=False)
-
-        trainer.fit(self.model, train_dataloaders=self.create_train_data_loaer(),
-                    val_dataloaders=self.create_val_data_loaer())
-
-        self.assertFalse(self.module_weights_equal(old_model.bert.embeddings, self.model.bert.embeddings))
-        for old_layer, layer in zip(old_model.bert.encoder.layer[0:-4], self.model.bert.encoder.layer[0:-4]):
-            self.assertTrue(self.module_weights_equal(old_layer, layer))
-
-        for old_layer, layer in zip(old_model.bert.encoder.layer[-4:None], self.model.bert.encoder.layer[-4:None]):
-            self.assertFalse(self.module_weights_equal(old_layer, layer))
-
-        self.assertFalse(self.module_weights_equal(old_model.bert.pooler, self.model.bert.pooler))
-        self.assertFalse(self.module_weights_equal(old_model.head, self.model.head))
-
-        self.model.melt_bert()
-
-        for param in self.model.bert.parameters():
-            self.assertTrue(param.requires_grad)
-
-        trainer = Trainer(accelerator=args.accelerator,
-                          devices=args.devices,
-                          strategy=args.strategy,
-                          num_nodes=args.num_nodes,
-                          amp_backend=args.amp_backend,
-                          precision=args.precision,
-                          max_epochs=1,
-                          enable_checkpointing=False)
-        trainer.fit(self.model, train_dataloaders=self.create_train_data_loaer(),
-                    val_dataloaders=self.create_val_data_loaer())
-
-        self.assertFalse(self.module_weights_equal(old_model.bert.embeddings, self.model.bert.embeddings))
-        for old_layer, layer in zip(old_model.bert.encoder.layer, self.model.bert.encoder.layer):
-            self.assertFalse(self.module_weights_equal(old_layer, layer))
-
-        self.assertFalse(self.module_weights_equal(old_model.bert.pooler, self.model.bert.pooler))
-        self.assertFalse(self.module_weights_equal(old_model.head, self.model.head))
-
-    def test_freeze_melt_bert(self):
-        # TODO: If self.model.bert_config['joint_io_weights'] is True, the parameter of self.model.bert.word_embeddings
-        #  are tied with the parameter of self.model.token_head, there assert the 'joint_io_weights' is False
-        self.assertFalse(self.model.bert_config.joint_io_weights)
-
-        for param in self.model.parameters():
-            self.assertTrue(param.requires_grad)
-
-        old_model = self.model.clone()
-        self.model.freeze_bert()
-        for param in self.model.bert.parameters():
-            self.assertFalse(param.requires_grad)
-        for param in self.model.head.parameters():
-            self.assertTrue(param.requires_grad)
-        args = self.get_trainer_args()
-        trainer = Trainer(accelerator=args.accelerator,
-                          devices=args.devices,
-                          strategy=args.strategy,
-                          num_nodes=args.num_nodes,
-                          amp_backend=args.amp_backend,
-                          precision=args.precision,
-                          max_epochs=1,
-                          enable_checkpointing=False)
-        trainer.fit(self.model, train_dataloaders=self.create_train_data_loaer(),
-                    val_dataloaders=self.create_val_data_loaer())
-        self.assertTrue(self.module_weights_equal(old_model.bert, self.model.bert))
-        self.assertFalse(self.module_weights_equal(old_model.head, self.model.head))
-
-        old_model = self.model.clone()
-        self.model.melt_bert()
-        args = self.get_trainer_args()
-        trainer = Trainer(accelerator=args.accelerator,
-                          devices=args.devices,
-                          strategy=args.strategy,
-                          num_nodes=args.num_nodes,
-                          amp_backend=args.amp_backend,
-                          precision=args.precision,
-                          max_epochs=1,
-                          enable_checkpointing=False)
-        trainer.fit(self.model, train_dataloaders=self.create_train_data_loaer(),
-                    val_dataloaders=self.create_val_data_loaer())
-        self.assertFalse(self.module_weights_equal(old_model.bert, self.model.bert))
-        self.assertFalse(self.module_weights_equal(old_model.head, self.model.head))
 
 
 if __name__ == '__main__':
