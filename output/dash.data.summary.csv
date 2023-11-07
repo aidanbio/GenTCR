@@ -1,0 +1,11 @@
+,source,epitope_species,epitope_gene,epitope_seq,cdr3_beta,positive,negative
+0,Dash,IAV,NP,"('ASNENMETM',)",305,305,0
+1,Dash,IAV,M1,"('GILGFVFTL',)",275,275,0
+2,Dash,EBV,BMLF,"('GLCTLVAML',)",76,76,0
+3,Dash,mCMV,M45,"('HGIRNASFI',)",291,291,0
+4,Dash,IAV,F2,"('LSLRNPILV',)",117,117,0
+5,Dash,CMV,pp65,"('NLVPMVATV',)",61,61,0
+6,Dash,IAV,PA,"('SSLENFRAYV',)",324,324,0
+7,Dash,mCMV,M38,"('SSPPMFRV',)",158,158,0
+8,Dash,IAV,PB1,"('SSYRRPVGI',)",642,642,0
+9,Dash,mCMV,m139,"('TVYGFCLL',)",87,87,0
