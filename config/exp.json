@@ -1,0 +1,58 @@
+{
+  "testexp": {
+    "title": "Generating epitope-specific TCR sequences using s pre-trained protein language model",
+    "description": "Generating epitope-specific TCR sequences using s pre-trained protein language model",
+    "paper": "ASAP",
+    "output_dir": "../output/testexp",
+    "taskflow": {
+      "mlm_finetune": {
+        "type": "mlm_finetune",
+        "plm_name_or_path": "facebook/esm2_t48_15B_UR50D",
+        "peft": {
+          "bits": 4
+        },
+        "data": {
+          "config": "../config/data.json",
+          "data_key": "immunecode",
+          "val_size": 0.2,
+          "mut_ratio": 0.4,
+          "mut_probs": [0.5, 0.5],
+          "seq_format": "{epitope_seq}{target_seq}"
+        },
+        "trainer": {
+          "args": {
+            "dataloader_num_workers": 4,
+            "dataloader_pin_memory": true,
+            "per_device_train_batch_size": 256,
+            "per_device_eval_batch_size": 256,
+            "gradient_accumulation_steps": 4,
+            "gradient_checkpointing": true,
+            "lr_scheduler_type": "polynomial",
+            "warmup_ratio": 0.2,
+            "weight_decay": 0.01,
+            "num_train_epochs": 100,
+            "learning_rate": 2e-4,
+            "fp16": true,
+            "evaluation_strategy": "steps",
+            "eval_steps": 0.01,
+            "label_names": ["labels"],
+            "load_best_model_at_end": true,
+            "metric_for_best_model": "eval_loss",
+            "save_strategy": "steps",
+            "save_steps": 0.01,
+            "logging_strategy": "steps",
+            "logging_steps": 0.01,
+            "optim": "paged_adamw_8bit",
+            "output_dir": "{task_output_dir}"
+          },
+          "callbacks": [
+            {
+              "type": "EarlyStoppingCallback",
+              "early_stopping_patience": 10
+            }
+          ]
+        }
+      }
+    }
+  }
+}

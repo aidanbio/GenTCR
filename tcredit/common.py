@@ -1,3 +1,5 @@
+import collections
+
 from difflib import SequenceMatcher
 
 import glob
@@ -305,6 +307,14 @@ class CollectionUtils(object):
                 new_dict[k] = v
         the_dict.clear()
         the_dict.update(new_dict)
+
+    @classmethod
+    def recursive_replace_substr(cls, d, ss1, ss2):
+        for k, v in d.items():
+            if isinstance(v, str) and ss1 in v:
+                d[k] = v.replace(ss1, ss2)
+            elif isinstance(v, collections.abc.Mapping):
+                cls.recursive_replace_substr(v, ss1, ss2)
 
 class SlurmUtils(object):
     @staticmethod
@@ -718,6 +728,29 @@ class CollectionUtilsTest(BaseTest):
         self.assertTrue(all(old_sd[k.replace(target_prefix, source_prefix)] == sd[k] for k in filter(lambda k: k not in no_prefix_keys, sd.keys())))
         CollectionUtils.update_dict_key_prefix(sd, target_prefix, source_prefix)
         self.assertEqual(sd, old_sd)
+
+    def test_recursive_update_value(self):
+        d = {
+            'a': 'v1',
+            'b': {
+                'c': 'vvx',
+                'd': {
+                    'e': 'vvx',
+                    'f': 'v1'
+                }
+            }
+        }
+        self.assertEqual('v1', d['a'])
+        self.assertEqual('vvx', d['b']['c'])
+        self.assertEqual('vvx', d['b']['d']['e'])
+        self.assertEqual('v1', d['b']['d']['f'])
+
+        CollectionUtils.recursive_replace_substr(d, 'vv', 'v2')
+        self.assertEqual('v1', d['a'])
+        self.assertEqual('v2x', d['b']['c'])
+        self.assertEqual('v2x', d['b']['d']['e'])
+        self.assertEqual('v1', d['b']['d']['f'])
+
 
 class SlurmUtilsTest(BaseTest):
     def test_parse_nodelist(self):

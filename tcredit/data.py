@@ -13,6 +13,7 @@ from sklearn.model_selection import train_test_split
 import torch
 from torch.utils.data import Dataset, DataLoader, TensorDataset, random_split
 from transformers import AutoTokenizer
+import datasets as hf_dataset
 
 from tcredit.bioseq import IupacAminoAcid, is_valid_aaseq, GAP, UniformAASeqMutator
 from tcredit.mhcdomain import PanMHCIContactDomain
@@ -314,6 +315,10 @@ class EpitopeTargetDataset(Dataset):
             return pd.read_csv(self.fn_summary_csv, index_col=0)
         else:
             return self._summary_df(self.df)
+
+    def to_hf(self, select_cols=None):
+        df = self.df[select_cols] if select_cols else self.df
+        return hf_dataset.Dataset.from_pandas(df, preserve_index=False)
 
     def _summary_df(self, df):
         rows = []
@@ -1010,75 +1015,7 @@ class TCRdbEpitopeTCRDataset(EpitopeTargetDataset):
         return df
 
 
-# class ConcatEpitopeComplexDataset(EpitopeComplexDataset):
-#     def __init__(self, config=None):
-#         super().__init__(config)
-#
-#     @property
-#     def bind_target(self):
-#         return EpitopeComplexComponent.from_str(self.config['bind_target'])
-#
-#     def _load_df(self, args=None):
-#         dfs = []
-#         for key in self.config['datasets']:
-#             ds = EpitopeComplexDataset.from_key(key, args)
-#             dfs.append(ds.df)
-#         return pd.concat(dfs)
-
-# class EpitopeComplexSentLitDataModule(pl.LightningDataModule):
-#     def __init__(self, config):
-#         super().__init__()
-#         self.config = config
-#         # self.init_datasets()
-# 
-#     def init_datasets(self):
-#         logger.info(f"Init train/val datasets with self.config['train']: {self.config['train']}")
-#         ds = EpitopeComplexDataset.from_key(self.config['train']['data'])
-#         if self.config['train'].get('exclude'):
-#             ds = self._exclude_data(ds)
-#         self.train_ds, self.val_ds = ds.train_test_split(test_size=self.config['train']['val_size'], shuffle=True)
-#         logger.info(f'Done to setup train data {ds.name}, len(train_ds): {len(self.train_ds)}, len(val_ds): {len(self.val_ds)}')
-# 
-#         if 'test' in self.config:
-#             logger.info(f"Init test datasets, self.config['test']: {self.config['test']}")
-#             self.test_ds_map = {k: EpitopeComplexDataset.from_key(k) for k in self.config['test']['data']}
-#             logger.info(f'Done to setup test data: {[(k, len(ds)) for k, ds in self.test_ds_map.items()]}')
-# 
-#     def setup(self, stage):
-#         logger.info(f'Setup data module: stage: {stage}, self.config: {self.config}')
-#         if stage == "fit":
-#             ds = EpitopeComplexDataset.from_key(self.config['train']['data'])
-#             if self.config['train'].get('exclude'):
-#                 ds = self._exclude_data(ds)
-#             self.train_ds, self.val_ds = ds.train_test_split(test_size= self.config['train']['val_size'], shuffle=True)
-#             logger.info(f'Done to setup train data {ds.name}, len(train_ds): {len(self.train_ds)}, len(val_ds): {len(self.val_ds)}')
-# 
-#         if stage == "test":
-#             self.test_ds_map = {k: EpitopeComplexDataset.from_key(k) for k in self.config['test']['data']}
-#             logger.info(f'Done to setup test data: {[(k, len(ds)) for k, ds in self.test_ds_map.items()]}')
-# 
-#     def train_dataloader(self):
-#         return DataLoader(self.train_ds, batch_size=self.config['train']['batch_size'], shuffle=self.config['train'].get('shuffle', False))
-# 
-#     def val_dataloader(self):
-#         return DataLoader(self.val_ds, batch_size=self.config['train']['batch_size'], shuffle=self.config['train'].get('shuffle', False))
-# 
-#     def test_dataloader(self):
-#         return CombinedLoader({k: DataLoader(ds, batch_size=self.config['test'].get('batch_size', len(ds)), shuffle=self.config['test'].get('shuffle', False))
-#                                for k, ds in self.test_ds_map.items()})
-# 
-#     def _exclude_data(self, ds):
-#         config = self.config['train']['exclude']
-#         target_cols = config['columns']
-#         for data_key in config['data']:
-#             exclude_ds = EpitopeComplexDataset.from_key(data_key)
-#             ds = ds.exclude_by(exclude_ds=exclude_ds, target_cols=target_cols, inplace=True)
-#         return ds
-
-### Tests
-
-
-class EpitopeTargetSeqCollator:
+class EpitopeTargetMaskedLMCollator:
     def __init__(self,
                  tokenizer=None,
                  epitope_seq_mutator=None,
@@ -1104,15 +1041,13 @@ class EpitopeTargetSeqCollator:
     def __call__(self, batch):
         seqs = []
         masked_seqs = []
-        labels = []
-        for epitope_seq, target_seq, label in batch:
+        for epitope_seq, target_seq, _ in batch:
             seqs.append(self.seq_format.format(epitope_seq=epitope_seq, target_seq=target_seq))
             masked_epitope_seq = self._get_masked_seq(epitope_seq,
                                                       self.epitope_seq_mutator) if self.epitope_seq_mutator else epitope_seq
             masked_target_seq = self._get_masked_seq(target_seq,
                                                      self.target_seq_mutator) if self.target_seq_mutator else target_seq
             masked_seqs.append(self.seq_format.format(epitope_seq=masked_epitope_seq, target_seq=masked_target_seq))
-            labels.append(label)
 
         inputs = self.tokenizer(masked_seqs,
                                 padding="max_length",
@@ -1126,8 +1061,10 @@ class EpitopeTargetSeqCollator:
                                  max_length=self.max_len,
                                  return_overflowing_tokens=False,
                                  return_tensors="pt")
-        targets = (torch.tensor(labels), targets)
-        return inputs, targets
+        input_ids = inputs['input_ids']
+        target_ids = targets['input_ids']
+        inputs['labels'] = torch.where(input_ids == self.tokenizer.mask_token_id, target_ids, -100)
+        return inputs
 
     def _get_masked_seq(self, seq, seq_mutator=None):
         return ''.join(seq_mutator.mutate(seq)[0]).replace(GAP, self.tokenizer.mask_token)
@@ -1309,12 +1246,12 @@ class DatasetTestFixture:
             plm_name_or_path = '../output/peft_esm2_t33_650M_UR50D'
             tokenizer = AutoTokenizer.from_pretrained(plm_name_or_path)
             seq_mutator = UniformAASeqMutator(mut_ratio=0.2, mut_probs=(1, 0))
-            collator = EpitopeTargetSeqCollator(tokenizer=tokenizer,
-                                                epitope_seq_mutator=None,
-                                                target_seq_mutator=seq_mutator,
-                                                max_epitope_len=ds.max_epitope_len,
-                                                max_target_len=ds.max_target_len,
-                                                seq_format='{epitope_seq}{target_seq}')
+            collator = EpitopeTargetMaskedLMCollator(tokenizer=tokenizer,
+                                                     epitope_seq_mutator=None,
+                                                     target_seq_mutator=seq_mutator,
+                                                     max_epitope_len=ds.max_epitope_len,
+                                                     max_target_len=ds.max_target_len,
+                                                     seq_format='{epitope_seq}{target_seq}')
             if val_size:
                 train_ds, val_ds = ds.train_test_split(test_size=val_size)
                 return (DataLoader(train_ds, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers,
@@ -1362,36 +1299,27 @@ class EpitopeTargetDSDataLoaderTest(EpitopeTargetDatasetTest):
 
         cur_batch_size = self.real_batch_sizes[batch_idx]
         expected_shape = (cur_batch_size, self.collator.max_len)
-        inputs, targets = batch
-        targets = targets[1]
-        input_ids, input_attention_mask = inputs['input_ids'], inputs['attention_mask']
-        target_ids, target_attention_mask = targets['input_ids'], targets['attention_mask']
+
+        input_ids, attention_mask, labels = batch['input_ids'], batch['attention_mask'], batch['labels']
         begin = batch_idx * self.batch_size
         end = (batch_idx + 1) * self.batch_size
         epitope_seqs = self.ds.df[CN.epitope_seq].values[begin:end]
         target_seqs = self.ds.df[CN.cdr3b_seq].values[begin:end]
 
         self.assertEqual(expected_shape, input_ids.shape)
-        self.assertEqual(expected_shape, input_attention_mask.shape)
-        self.assertEqual(expected_shape, target_ids.shape)
-        self.assertEqual(expected_shape, target_attention_mask.shape)
+        self.assertEqual(expected_shape, attention_mask.shape)
+        self.assertEqual(expected_shape, labels.shape)
 
         mask_token_id = self.tokenizer.mask_token_id
         for i in range(cur_batch_size):
             expected_n_masks = round(len(target_seqs[i]) * mut_ratio)
             self.assertTrue(sum(input_ids[i] == mask_token_id) == expected_n_masks)
-            self.assertArrayEqual(input_attention_mask[i], (input_ids[i] != self.tokenizer.pad_token_id).int())
-            self.assertArrayEqual(target_attention_mask[i], (target_ids[i] != self.tokenizer.pad_token_id).int())
+            self.assertArrayEqual(attention_mask[i], (input_ids[i] != self.tokenizer.pad_token_id).int())
+            self.assertTrue(sum(labels[i] != -100), len(labels[i]) - expected_n_masks)
 
-        for i in range(cur_batch_size):
-            cur_input_ids = copy.deepcopy(input_ids[i])
-            cur_target_ids = target_ids[i]
-            for j in range(cur_input_ids.shape[0]):
-                if cur_input_ids[j] == mask_token_id:
-                    cur_input_ids[j] = cur_target_ids[j]
-            self.assertArrayEqual(cur_input_ids, cur_target_ids)
+        orig_token_ids = torch.where(input_ids != mask_token_id, input_ids, labels)
 
-        decoded_seqs = self.tokenizer.batch_decode(target_ids, skip_special_tokens=True)
+        decoded_seqs = self.tokenizer.batch_decode(orig_token_ids, skip_special_tokens=True)
         decoded_seqs = list(map(lambda seq: StrUtils.rm_nonwords(seq), decoded_seqs))
         expected_seqs = [self.collator.seq_format.format(epitope_seq=e_seq, target_seq=t_seq)
                          for e_seq, t_seq in zip(epitope_seqs, target_seqs)]
