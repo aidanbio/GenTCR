@@ -63,7 +63,7 @@
     "taskflow": {
       "mlm_finetune": {
         "type": "mlm_finetune",
-        "plm_name_or_path": "facebook/esm2_t36_3B_UR50D",
+        "plm_name_or_path": "facebook/esm2_t33_650M_UR50D",
         "peft": {
           "bits": 4
         },
