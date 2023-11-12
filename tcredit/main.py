@@ -44,9 +44,12 @@ def save_task_bm(args):
     task = exp.create_task(args.task)
     output_dir = task.config['output_dir']
     bm_path = os.path.join(output_dir, args.bm_name)
+    logger.info(f'Loading best model from {bm_path}')
     model = AutoPeftModel.from_pretrained(bm_path, device_map='auto', torch_dtype=torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
+    logger.info(f'Saving best model to {output_dir}')
     model.save_pretrained(output_dir)
+    logger.info(f'Saving tokenizer to {output_dir}')
     tokenizer.save_pretrained(output_dir)
 
 def main():
