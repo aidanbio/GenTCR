@@ -14,7 +14,7 @@ from transformers.utils import logging as hf_logging
 
 # Logger
 logging.config.fileConfig('../config/logging.conf')
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('tcredit')
 warnings.filterwarnings('ignore')
 
 
@@ -48,7 +48,7 @@ def save_task_bm(args):
     model = AutoPeftModel.from_pretrained(bm_path, device_map='auto', torch_dtype=torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
     logger.info(f'Saving best model to {output_dir}')
-    model.save_pretrained(output_dir)
+    model.save_pretrained(output_dir, safe_serialization=True)
     logger.info(f'Saving tokenizer to {output_dir}')
     tokenizer.save_pretrained(output_dir)
 
