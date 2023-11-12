@@ -1,0 +1,4 @@
+{
+  "fn_sars2": "../output/immunecode.data.csv",
+  "epitope_len_range": [8, 14]
+}

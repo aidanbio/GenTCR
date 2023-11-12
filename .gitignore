@@ -1,4 +1,6 @@
 *.ckpt
+*.safetensors
+*.bin
 data
 old
 tmp
