@@ -1,6 +1,12 @@
+import os.path
+
+import torch
 import transformers
 from argparse import ArgumentParser
 import warnings
+from peft import AutoPeftModel
+from transformers import AutoTokenizer
+
 from tcredit.exp import Experiment
 from tcredit.data import EpitopeTargetDataset
 import logging
@@ -32,6 +38,17 @@ def run_task(args):
     task.run(args)
 
 
+def save_task_bm(args):
+    logger.info(f'Start save_task_bm with {args}...')
+    exp = Experiment.from_key(args.exp)
+    task = exp.create_task(args.task)
+    output_dir = task.config['output_dir']
+    bm_path = os.path.join(output_dir, args.bm_name)
+    model = AutoPeftModel.from_pretrained(bm_path, device_map='auto', torch_dtype=torch.bfloat16)
+    tokenizer = AutoTokenizer.from_pretrained(model.config.name_or_path)
+    model.save_pretrained(output_dir)
+    tokenizer.save_pretrained(output_dir)
+
 def main():
     parser = ArgumentParser('tcredit')
     parser.add_argument('--log_level', type=str, default='INFO')
@@ -49,6 +66,13 @@ def main():
     sub_parser.set_defaults(func=run_task)
     sub_parser.add_argument('--exp', type=str, default='testexp')
     sub_parser.add_argument('--task', type=str, default='mlm_finetune')
+
+    # Arguments for sub command 'save_task_bm'
+    sub_parser = subparsers.add_parser('save_task_bm')
+    sub_parser.set_defaults(func=save_task_bm)
+    sub_parser.add_argument('--exp', type=str, default='testexp')
+    sub_parser.add_argument('--task', type=str, default='mlm_finetune')
+    sub_parser.add_argument('--bm_name', type=str, default='checkpoint-3')
 
     args = parser.parse_args()
 
