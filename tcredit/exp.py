@@ -9,7 +9,7 @@ from transformers import BitsAndBytesConfig, AutoModelForMaskedLM, AutoTokenizer
     EarlyStoppingCallback
 import bitsandbytes as bnb
 
-from bioseq import UniformAASeqMutator
+from bioseq import UniformAASeqMutator, CalisImmunogenicAASeqMutator
 from tcredit.common import SlurmUtils, StrUtils, FileUtils, CollectionUtils, BaseTest
 from tcredit.data import EpitopeTargetDataset, EpitopeTargetMaskedLMCollator
 
@@ -143,15 +143,33 @@ class Experiment(object):
             return model, tokenizer
 
         def _load_train_val_datasets(self, tokenizer):
+            def create_seq_mutator(mut_config=None):
+                if mut_config:
+                    mut_config = copy.deepcopy(mut_config)
+                    mutator_type = mut_config.pop('type')
+                    if mutator_type == 'uniform':
+                        return UniformAASeqMutator(**mut_config)
+                    elif mutator_type == 'calis':
+                        return CalisImmunogenicAASeqMutator(**mut_config)
+                    else:
+                        raise ValueError(f'Unsupported seq mutator type: {mutator_type}')
+                return None
+
             config = self.config['data']
             EpitopeTargetDataset.FN_DATA_CONFIG = config.get('config', '../config/data-test.json')
 
             ds = EpitopeTargetDataset.from_key(config['data_key'])
             train_ds, val_ds = ds.train_test_split(test_size=config['val_size'], shuffle=True)
-            seq_mutator = UniformAASeqMutator(mut_ratio=config['mut_ratio'], mut_probs=config['mut_probs'])
+
+            epitope_seq_mutator = None
+            target_seq_mutator = None
+            if 'seq_mutators' in config:
+                epitope_seq_mutator = create_seq_mutator(config['seq_mutators'].get('epitope'))
+                target_seq_mutator = create_seq_mutator(config['seq_mutators'].get('target'))
+
             data_collator = EpitopeTargetMaskedLMCollator(tokenizer=tokenizer,
-                                                          epitope_seq_mutator=None,
-                                                          target_seq_mutator=seq_mutator,
+                                                          epitope_seq_mutator=epitope_seq_mutator,
+                                                          target_seq_mutator=target_seq_mutator,
                                                           max_epitope_len=ds.max_epitope_len,
                                                           max_target_len=ds.max_target_len,
                                                           seq_format=config.get('seq_format',
