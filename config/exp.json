@@ -199,7 +199,7 @@
   },
   "exp3": {
     "title": "exp3",
-    "description": "Making the mutaion properties of TCR CDR3beta and epitope sequences the same"
+    "description": "Making the mutaion properties of TCR CDR3beta and epitope sequences the same",
     "paper": "ASAP",
     "output_dir": "../output/exp3",
     "taskflow": {
