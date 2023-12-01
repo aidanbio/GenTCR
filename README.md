@@ -1,2 +1,2 @@
-# TCREdit
-Accelerating TCR-T Engineering for Immunotherapy  by editing Epitope-specific TCR CDR3&beta; sequences
+# GenTCR
+Accelerating TCR-T Engineering for Immunotherapy  by generating novel Epitope-specific TCR CDR3&beta; sequences

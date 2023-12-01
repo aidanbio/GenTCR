@@ -1,40 +1,33 @@
-""""
-# TCREdit: Editing SARS-CoV-2 T-cell epitope-specific TCRB sequences
-"""
-import streamlit as st
-import streamlit_datalist as datalist
-import pandas as pd
+import gradio as gr
 import numpy as np
-from tcredit.common import FileUtils
-from tcredit.data import CN
+import pandas as pd
+from gentcr.data import CN, EpitopeTargetDataset
 
-
-def change_label_style(label, font_size='12px', font_color='black', font_family='sans-serif'):
-    html = f"""
-    <script>
-        var elems = window.parent.document.querySelectorAll('p');
-        var elem = Array.from(elems).find(x => x.innerText == '{label}');
-        elem.style.fontSize = '{font_size}';
-        elem.style.color = '{font_color}';
-        elem.style.fontFamily = '{font_family}';
-    </script>
-    """
-    st.components.v1.html(html)
-
-
-st.title('TCREdit')
-st.subheader('Editing SARS-CoV-2 T-cell epitope-specific TCR$\\beta$ sequences')
-st.markdown('---')
+from gentcr.common import FileUtils
 
 dm = FileUtils.json_load('data.json')
-df = pd.read_csv(dm['fn_sars2'])
-epitopes = np.unique(df[CN.epitope_seq].values).tolist()
-epitope_lens = df[CN.epitope_len].unique()
-col1, col2 = st.columns([1, 3])
-with col1:
-    epitope = st.selectbox(label=r"$\textsf{\large Epitope:}$",
-                           options=epitopes)
+df = EpitopeTargetDataset.from_key(dm['data_key']).df
+epitopes = df[CN.epitope_seq].unique().tolist()
+sel_epitope = epitopes[0]
 
-with col2:
-    cdr3b = datalist.stDatalist(label=r"CDR3$\\beta$",
-                                options=df[df[CN.epitope_seq] == epitope][CN.cdr3b_seq].unique().tolist())
+with gr.Blocks('GenTCR') as demo:
+    def change_chk_epitope(dd_epitope):
+        print(dd_epitope)
+        return gr.CheckboxGroup(choices=list(dd_epitope), label='Edit epitope')
+
+    def update_chk_epitope(sel_epitope, chks):
+        sel_epitope = list(sel_epitope)
+        print(sel_epitope)
+        print(chks)
+        if chks:
+            for i in chks:
+                sel_epitope[i] = '-'
+        return gr.CheckboxGroup(choices=list(sel_epitope), type='index', value=chks, label='Edit epitope')
+
+    dd_epitope = gr.Dropdown(choices=epitopes, value=sel_epitope, label='Epitope')
+    chk_epitope = gr.CheckboxGroup(choices=list(sel_epitope), type='index', label='Edit epitope')
+    dd_epitope.change(change_chk_epitope, inputs=dd_epitope, outputs=chk_epitope)
+    chk_epitope.change(update_chk_epitope, inputs=[dd_epitope, chk_epitope], outputs=chk_epitope)
+
+if __name__ == "__main__":
+    demo.launch(debug=True, show_api=False)

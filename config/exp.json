@@ -89,7 +89,7 @@
             },
             "target": {
               "type": "uniform",
-              "mut_ratio": 0.2,
+              "mut_ratio": 0.4,
               "mut_probs": [0.8, 0.2]
             }
           },

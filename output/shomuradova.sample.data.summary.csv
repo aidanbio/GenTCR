@@ -1,0 +1,3 @@
+,source,epitope_species,epitope_gene,epitope_seq,cdr3_beta,positive,negative
+0,Shomuradova,SARS-CoV-2,Spike,RLQSLQTYV,27,27,0
+1,Shomuradova,SARS-CoV-2,Spike,YLQPRTFLL,305,305,0

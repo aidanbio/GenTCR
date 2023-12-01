@@ -30,6 +30,15 @@
       "nodup": true,
       "query": "(cdr3b_len >= 8) and (cdr3b_len <= 23)"
     },
+    "immunecode_9mer": {
+      "type": "ImmuneCODEEpitopeTargetDataset",
+      "bind_target": "tcr",
+      "fn": "../data/ImmuneCODE-MIRA-Release002.1/peptide-detail-ci.csv",
+      "fn_subject": "../data/ImmuneCODE-MIRA-Release002.1/subject-metadata.csv",
+      "nodup": true,
+      "query": "(epitope_len == 9) and (cdr3b_len >= 8) and (cdr3b_len <= 23)"
+    },
+
     "iedb_tcr": {
       "type": "IEDBEpitopeTCRDataset",
       "fn": "../data/IEDB/receptor_full_v3.csv"
@@ -61,6 +70,15 @@
       "nodup": true,
       "query": "(epitope_len >= 8) and (epitope_len <= 15)",
       "n_cdr3b_cutoff": 5
+    },
+    "shomuradova_minervina_gfeller": {
+      "type": "ConcatEpitopeTargetDataset",
+      "bind_target": "tcr",
+      "description": "Combined epitope-specific CDR3b data from {Shomuradova,2021}, {Minervina,2022}, and {Gfeller,2023}",
+      "datasets": [
+        "shomuradova", "minervina", "gfeller"
+      ],
+      "nodup": true
     },
     "tcrdb_pos": {
       "type": "TCRdbEpitopeTCRDataset",
