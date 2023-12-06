@@ -260,7 +260,7 @@
     }
   },
   "exp4": {
-    "title": "exp3",
+    "title": "exp4",
     "description": "Mutation ratio: 0.15->0.2 and 0.15->0.25 for epitope and TCR CDR3beta sequences respectively",
     "paper": "ASAP",
     "output_dir": "../output/exp4",
