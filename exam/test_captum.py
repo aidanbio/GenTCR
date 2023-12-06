@@ -2,6 +2,7 @@ import unittest
 
 import torch
 import torch.nn as nn
+from IPython.core.display import HTML
 
 from transformers import BertTokenizer
 from transformers import BertForSequenceClassification, BertConfig
@@ -10,14 +11,7 @@ from captum.attr import IntegratedGradients
 from captum.attr import InterpretableEmbeddingBase, TokenReferenceBase
 from captum.attr import visualization
 from captum.attr import configure_interpretable_embedding_layer, remove_interpretable_embedding_layer
-
-tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-model = BertForSequenceClassification.from_pretrained('bert-base-uncased')
-
-
-# We need to split forward pass into two part:
-# 1) embeddings computation
-# 2) classification
+from gentcr.common import TorchUtils
 
 def compute_bert_outputs(model_bert, embedding_output, attention_mask=None, head_mask=None):
     if attention_mask is None:
@@ -87,24 +81,25 @@ class CaptumTest(unittest.TestCase):
         attrs, delta = ig.attribute(input_embedding, n_steps=500, return_convergence_delta=True)
         print('pred: ', pred_ind, '(', '%.2f' % pred, ')', ', delta: ', abs(delta))
 
-        tokens = tokenizer.convert_ids_to_tokens(input_ids[0].numpy().tolist())
-        self.show_attrs(attrs, tokens, pred, pred_ind, label, delta, vis_data_records_ig)
+        tokens = tokenizer.convert_ids_to_tokens(TorchUtils.to_numpy(input_ids)[0].tolist())
+        self.show_attrs(attrs, tokens, pred, pred_ind, label, delta)
 
-    def show_attrs(self, attributions, tokens, pred, pred_ind, label, delta, vis_data_records):
+    def show_attrs(self, attributions, tokens, pred, pred_ind, label, delta):
         attributions = attributions.sum(dim=2).squeeze(0)
         attributions = attributions / torch.norm(attributions)
-        attributions = attributions.detach().numpy()
+        attributions = TorchUtils.to_numpy(attributions)
 
-        visualization.visualize_text([visualization.VisualizationDataRecord(
-            attributions,
-            pred,
-            pred_ind,
-            label,
-            "label",
-            attributions.sum(),
-            tokens[:len(attributions)],
-            delta)])
-
+        html: HTML = visualization.visualize_text([visualization.VisualizationDataRecord(
+                                                                            attributions,
+                                                                            pred,
+                                                                            pred_ind,
+                                                                            label,
+                                                                            "label",
+                                                                            attributions.sum(),
+                                                                            tokens[:len(attributions)],
+                                                                            delta)])
+        from IPython.core.display import display_html
+        display_html(html)
 
 if __name__ == '__main__':
     unittest.main()

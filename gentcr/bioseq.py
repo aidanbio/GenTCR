@@ -730,6 +730,13 @@ class UniformAASeqMutator(AASeqMutator):
         seqlen = len(seq)
         return sorted(np.random.choice(seqlen, round(seqlen * self.mut_ratio), replace=False))
 
+class FixedPosAASeqMutator(AASeqMutator):
+    def __init__(self, mut_positions=None, mut_probs=None, aasubstor=None, reverse=False):
+        super().__init__(None, mut_probs, aasubstor, reverse)
+        self.mut_positions = mut_positions
+
+    def choice_mut_positions(self, seq):
+        return sorted(self.mut_positions)
 
 class NormalAASeqMutator(AASeqMutator):
     def __init__(self, mut_ratio=0.1, mut_probs=None, aasubstor=None, reverse=False):
@@ -1442,6 +1449,7 @@ class AASeqMutatorTest(BaseTest):
         mutators = [
             UniformAASeqMutator(mut_ratio=0.2, mut_probs=(0.7, 0.3)),
             CalisImmunogenicAASeqMutator(mut_ratio=0.2, mut_probs=(0.7, 0.3)),
+            FixedPosAASeqMutator(mut_positions=[1, 3, 5], mut_probs=(0.7, 0.3)),
         ]
         for mutator in mutators:
             muted_seq, muted_positions, orig_aas, = mutator.mutate(self.seq)
@@ -1465,7 +1473,8 @@ class AASeqMutatorTest(BaseTest):
         print('muted_seq:%s' % muted_seq)
         print('orig_aas: %s' % orig_aas)
         print('muted_positions: %s' % muted_positions)
-        self.assertEqual(len(muted_positions), round(len(self.seq) * mut_ratio))
+        if mut_ratio:
+            self.assertEqual(len(muted_positions), round(len(self.seq) * mut_ratio))
         self.assertTrue(all([self.seq[pos] != muted_seq[pos] for pos in muted_positions]))
         for i, pos in enumerate(muted_positions):
             muted_seq[pos] = orig_aas[i]

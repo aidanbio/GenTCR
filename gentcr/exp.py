@@ -171,9 +171,7 @@ class Experiment(object):
                                                           epitope_seq_mutator=epitope_seq_mutator,
                                                           target_seq_mutator=target_seq_mutator,
                                                           max_epitope_len=ds.max_epitope_len,
-                                                          max_target_len=ds.max_target_len,
-                                                          seq_format=config.get('seq_format',
-                                                                                '{epitope_seq}{target_seq}'))
+                                                          max_target_len=ds.max_target_len)
             return train_ds, val_ds, data_collator
 
         def _create_callbacks(self):

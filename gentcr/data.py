@@ -1060,7 +1060,7 @@ class EpitopeTargetMaskedLMCollator:
                  target_seq_mutator=None,
                  max_epitope_len=None,
                  max_target_len=None,
-                 seq_format=None):
+                 has_sep=False):
         """
         Epitope and target sequence collator
         :param tokenizer: transformers.PreTrainedTokenizer
@@ -1068,53 +1068,57 @@ class EpitopeTargetMaskedLMCollator:
         :param target_seq_mutator: target sequence mutator
         :param max_epitope_len: max length of epitope sequence
         :param max_target_len: max length of target sequence
-        :param seq_format: sequence format string, e.g. '{epitope_seq}{target_seq}'
+        :param has_sep: is whether has separator between epitope and target sequence
         """
         self.tokenizer = tokenizer
         self.epitope_seq_mutator = epitope_seq_mutator
         self.target_seq_mutator = target_seq_mutator
-        self.seq_format = seq_format
+        self.has_sep = has_sep
         self.max_len = self._get_max_len(max_epitope_len, max_target_len)
+
+    @property
+    def sep_token(self):
+        return self.tokenizer.eos_token
 
     def __call__(self, batch):
         seqs = []
-        masked_seqs = []
+        muted_seqs = []
         for epitope_seq, target_seq, _ in batch:
-            seqs.append(self.seq_format.format(epitope_seq=epitope_seq, target_seq=target_seq))
-            masked_epitope_seq = self._get_masked_seq(epitope_seq,
+            seqs.append(self.format_seqs(epitope_seq, target_seq))
+            muted_epitope_seq = self._get_mutated_seq(epitope_seq,
                                                       self.epitope_seq_mutator) if self.epitope_seq_mutator else epitope_seq
-            masked_target_seq = self._get_masked_seq(target_seq,
-                                                     self.target_seq_mutator) if self.target_seq_mutator else target_seq
-            masked_seqs.append(self.seq_format.format(epitope_seq=masked_epitope_seq, target_seq=masked_target_seq))
 
-        inputs = self.tokenizer(masked_seqs,
-                                padding="max_length",
-                                truncation=False,
-                                max_length=self.max_len,
-                                return_overflowing_tokens=False,
-                                return_tensors="pt")
-        targets = self.tokenizer(seqs,
-                                 padding="max_length",
-                                 truncation=False,
-                                 max_length=self.max_len,
-                                 return_overflowing_tokens=False,
-                                 return_tensors="pt")
+            muted_target_seq = self._get_mutated_seq(target_seq,
+                                                     self.target_seq_mutator) if self.target_seq_mutator else target_seq
+
+            muted_seqs.append(self.format_seqs(muted_epitope_seq, muted_target_seq))
+        inputs = self.encode(muted_seqs)
+        targets = self.encode(seqs)
         input_ids = inputs['input_ids']
         target_ids = targets['input_ids']
-        inputs['labels'] = torch.where(input_ids == self.tokenizer.mask_token_id, target_ids, -100)
+        inputs['labels'] = torch.where(input_ids != target_ids, target_ids, -100)
         return inputs
 
-    def _get_masked_seq(self, seq, seq_mutator=None):
-        return ''.join(seq_mutator.mutate(seq)[0]).replace(GAP, self.tokenizer.mask_token)
+    def format_seqs(self, epitope_seq, target_seq):
+        return f"{epitope_seq}{self.sep_token if self.has_sep else ''}{target_seq}"
+
+    def encode(self, seqs):
+        return self.tokenizer(seqs,
+                              padding="max_length",
+                              truncation=False,
+                              max_length=self.max_len,
+                              return_overflowing_tokens=False,
+                              return_tensors="pt")
+
+
+    def _get_mutated_seq(self, seq, seq_mutator=None):
+        muted = seq_mutator.mutate(seq)
+        muted_seq = ''.join(muted[0]).replace(GAP, self.tokenizer.mask_token)
+        return muted_seq
 
     def _get_max_len(self, max_epitope_len, max_target_len):
-        max_len = 2  # +2 for [CLS] and [EOS]
-        if '{epitope_seq}' in self.seq_format:
-            max_len += max_epitope_len
-        if '{target_seq}' in self.seq_format:
-            max_len += max_target_len
-        max_len += len(self.seq_format.replace('{epitope_seq}', '').replace('{target_seq}', ''))
-        return max_len
+        max_len = max_epitope_len + max_target_len + 2  # +2 for [CLS] and [EOS]
+        return max_len + 1 if self.has_sep else max_len
 
 
 class BaseDatasetTest(BaseTest):
@@ -1331,8 +1335,7 @@ class DatasetTestFixture:
                                                      epitope_seq_mutator=None,
                                                      target_seq_mutator=seq_mutator,
                                                      max_epitope_len=ds.max_epitope_len,
-                                                     max_target_len=ds.max_target_len,
-                                                     seq_format='{epitope_seq}{target_seq}')
+                                                     max_target_len=ds.max_target_len)
             if val_size:
                 train_ds, val_ds = ds.train_test_split(test_size=val_size)
                 return (DataLoader(train_ds, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers,
@@ -1342,6 +1345,47 @@ class DatasetTestFixture:
             else:
                 return DataLoader(ds, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers,
                                   collate_fn=collator)
+
+
+class EpitopeTargetMaskedLMCollatorTest(BaseTest):
+    def setUp(self):
+        super().setUp()
+
+        EpitopeTargetDataset.FN_DATA_CONFIG = '../config/data-test.json'
+        self.ds = EpitopeTargetDataset.from_key('immunecode')
+        self.plm_name_or_path = '../output/peft_esm2_t33_650M_UR50D'
+        self.tokenizer = AutoTokenizer.from_pretrained(self.plm_name_or_path)
+        self.seq_mutator = UniformAASeqMutator(mut_ratio=0.2, mut_probs=(0.7, 0.3))
+        self.collator = EpitopeTargetMaskedLMCollator(tokenizer=self.tokenizer,
+                                                      epitope_seq_mutator=self.seq_mutator,
+                                                      target_seq_mutator=None,
+                                                      max_epitope_len=self.ds.max_epitope_len,
+                                                      max_target_len=self.ds.max_target_len)
+
+    def test_call(self):
+        inputs = [self.ds[i] for i in range(len(self.ds))]
+        outputs = self.collator(inputs)
+
+        seqs = [self.collator.format_seqs(epitope_seq, target_seq) for epitope_seq, target_seq, _ in inputs]
+        target_ids = self.collator.encode(seqs)['input_ids']
+
+        input_ids = outputs['input_ids']
+        attention_mask = outputs['attention_mask']
+        labels = outputs['labels']
+        expected = (len(self.ds), self.collator.max_len)
+        self.assertEqual(expected, input_ids.shape)
+        self.assertEqual(expected, attention_mask.shape)
+        self.assertEqual(expected, labels.shape)
+        self.assertEqual(expected, target_ids.shape)
+
+        for i in range(len(self.ds)):
+            for j in range(self.collator.max_len):
+                input_id = input_ids[i, j]
+                target_id = target_ids[i, j]
+                if labels[i, j] == -100:
+                    self.assertEqual(input_id, target_id)
+                else:
+                    self.assertNotEqual(input_id, target_id)
 
 
 class EpitopeTargetDSDataLoaderTest(EpitopeTargetDatasetTest):
@@ -1402,7 +1446,7 @@ class EpitopeTargetDSDataLoaderTest(EpitopeTargetDatasetTest):
 
         decoded_seqs = self.tokenizer.batch_decode(orig_token_ids, skip_special_tokens=True)
         decoded_seqs = list(map(lambda seq: StrUtils.rm_nonwords(seq), decoded_seqs))
-        expected_seqs = [self.collator.seq_format.format(epitope_seq=e_seq, target_seq=t_seq)
+        expected_seqs = [self.collator.format_seqs(e_seq, t_seq)
                          for e_seq, t_seq in zip(epitope_seqs, target_seqs)]
         self.assertArrayEqual(expected_seqs, decoded_seqs)
 
