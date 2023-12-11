@@ -1,5 +1,6 @@
 import unittest
 import torch
+import torch.nn.functional as F
 from captum.attr import configure_interpretable_embedding_layer, LayerConductance
 from transformers import BertForQuestionAnswering, AutoTokenizer, BertTokenizer, AutoModelForQuestionAnswering
 import numpy as np
@@ -169,12 +170,18 @@ class DrawAttnTest(unittest.TestCase):
                          xticklabels=xticklabels,
                          yticklabels=yticklabels,
                          linewidth=0.2,
+                         cmap='coolwarm',
                          ax=axes[0])
         ax.set_title('Predicted Start Position')
         ax.set_xlabel('Tokens')
         ax.set_ylabel('Layers')
 
-        ax = sns.heatmap(layer_attrs[1], xticklabels=xticklabels, yticklabels=yticklabels, linewidth=0.2, ax=axes[1])
+        ax = sns.heatmap(layer_attrs[1],
+                         xticklabels=xticklabels,
+                         yticklabels=yticklabels,
+                         linewidth=0.2,
+                         cmap='coolwarm',
+                         ax=axes[1])
         ax.set_title('Predicted End Position')
         ax.set_xlabel('Tokens')
         ax.set_ylabel('Layers')
@@ -202,6 +209,7 @@ class DrawAttnTest(unittest.TestCase):
                               position_ids=position_ids,
                               attention_mask=attention_mask)
             pred = pred[position]
+            # pred = F.softmax(pred, dim=-1)
             return pred.max(1).values
 
         def summarize_attributions(attributions):

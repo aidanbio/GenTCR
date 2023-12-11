@@ -1090,10 +1090,11 @@ class EpitopeTargetMaskedLMCollator:
 
             muted_target_seq = self._get_mutated_seq(target_seq,
                                                      self.target_seq_mutator) if self.target_seq_mutator else target_seq
-
             muted_seqs.append(self.format_seqs(muted_epitope_seq, muted_target_seq))
+
         inputs = self.encode(muted_seqs)
         targets = self.encode(seqs)
+
         input_ids = inputs['input_ids']
         target_ids = targets['input_ids']
         inputs['labels'] = torch.where(input_ids != target_ids, target_ids, -100)
