@@ -40,7 +40,7 @@ class Experiment(object):
             super().__init__(config=config)
 
         def _run(self, args=None):
-            logger.info(f'Start to MLMFinetuneTask.run with args: {args}...')
+            logger.info(f'Start to MLMFinetuneTask.run with args: {args} and exp_config: {self.config}')
             output_dir = self.config['output_dir']
             if not os.path.exists(output_dir):
                 os.mkdir(output_dir)
