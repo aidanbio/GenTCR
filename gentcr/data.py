@@ -1,3 +1,5 @@
+from itertools import repeat
+
 import copy
 import os
 import unittest
@@ -14,8 +16,10 @@ import torch
 from torch.utils.data import Dataset, DataLoader, TensorDataset, random_split
 from transformers import AutoTokenizer
 import datasets as hf_dataset
+from tqdm import tqdm
 
-from gentcr.bioseq import IupacAminoAcid, is_valid_aaseq, GAP, UniformAASeqMutator
+from gentcr.bioseq import IupacAminoAcid, is_valid_aaseq, GAP, UniformAASeqMutator, CalisImmunogenicAASeqMutator, \
+    FixedPosAASeqMutator
 from gentcr.mhcdomain import PanMHCIContactDomain
 from gentcr.common import StrEnum, FileUtils, StrUtils, basename, BaseTest
 from gentcr.mhcnc import MHCAlleleName, ALLELE_SEP
@@ -103,11 +107,15 @@ class EpitopeTargetDataset(Dataset):
         epitope_species = auto()
         epitope_gene = auto()
         epitope_seq = auto()
+        orig_epitope_seq = auto()
         epitope_start = auto()
         epitope_end = auto()
         epitope_len = auto()
         mhc_allele = auto()
+        mhc_seq = auto()
+        orig_mhc_seq = auto()
         cdr3b_seq = auto()
+        orig_cdr3b_seq = auto()
         cdr3b_len = auto()
         ref_id = auto()
         source = auto()
@@ -164,6 +172,61 @@ class EpitopeTargetDataset(Dataset):
             ]
             logger.info('Current df.shape: %s' % str(df.shape))
 
+    class EpitopeTargetSeqMutator(object):
+        def __init__(self,
+                     bind_target=EpitopeTargetComponent.TCR,
+                     epitope_seq_mutator=None,
+                     target_seq_mutator=None,
+                     n_mutations=1):
+            self.bind_target = bind_target
+            self.epitope_seq_mutator = epitope_seq_mutator
+            self.target_seq_mutator = target_seq_mutator
+            self.n_mutations = n_mutations
+
+        def mutate(self, df=None, args=None):
+            logger.info(f'Start to mutate epitope and target sequences in MAIN proc, df_source.shape: {df.shape}')
+            n_workers = args.n_workers if args else 1
+            if n_workers > 1:
+                with Pool(processes=n_workers) as pool:
+                    params = zip(np.array_split(df, n_workers))
+                    results = pool.starmap(self._mutate, params)
+                df = pd.concat(results)
+            else:
+                df = self._mutate(df)
+            logger.info(f'Done to mutate epitope and target sequences in MAIN proc, df.shape: {df.shape}')
+            return df
+
+        def _mutate(self, df):
+            logger.info(f'Start to mutate epitope and target sequences in SUB proc, df.shape: {df.shape}')
+            new_df = df.copy()
+            for index, row in tqdm(df.iterrows(), total=len(df)):
+                for mi in range(self.n_mutations):
+                    new_row = row.copy()
+                    if self.epitope_seq_mutator:
+                        epitope_seq = new_row[CN.epitope_seq]
+                        new_row[CN.orig_epitope_seq] = epitope_seq
+                        new_row[CN.epitope_seq] = ''.join(self.epitope_seq_mutator.mutate(epitope_seq)[0])
+                    if self.target_seq_mutator:
+                        if self.bind_target == EpitopeTargetComponent.MHC:
+                            target_seq = new_row[CN.mhc_seq]
+                            new_row[CN.orig_mhc_seq] = target_seq
+                            new_row[CN.mhc_seq] = ''.join(self.target_seq_mutator.mutate(target_seq)[0])
+                        else:
+                            target_seq = new_row[CN.cdr3b_seq]
+                            new_row[CN.orig_cdr3b_seq] = target_seq
+                            new_row[CN.cdr3b_seq] = ''.join(self.target_seq_mutator.mutate(target_seq)[0])
+                    if mi == 0:
+                        new_df.loc[index] = new_row
+                        logger.debug(f'Update mutated row: {new_row}')
+                    else:
+                        # new_df = pd.concat([new_df, new_row.to_frame().T], ignore_index=True)
+                        new_df.loc[len(new_df)] = new_row
+                        logger.debug(f'Append mutated row: {new_row}')
+
+            new_df.index = new_df.apply(lambda r: EpitopeTargetDataset._get_index(r, bind_target=self.bind_target), axis=1)
+            logger.info(f'Done to mutate epitope and target sequences in SUB proc, new_df.shape: {new_df.shape}')
+            return new_df
+
     #############
     FN_DATA_CONFIG = '../config/data.json'
     _configs = None
@@ -171,6 +234,7 @@ class EpitopeTargetDataset(Dataset):
     def __init__(self, config):
         self.config = config
         self._filters = None
+        self._seq_mutator = None
         self._mhc_domain = None
         self.df = None
 
@@ -201,6 +265,16 @@ class EpitopeTargetDataset(Dataset):
         return self._filters
 
     @property
+    def seq_mutator(self):
+        if self._seq_mutator is None:
+            self._seq_mutator = self._create_seq_mutator()
+        return self._seq_mutator
+
+    @property
+    def is_mutated(self):
+        return self.seq_mutator is not None
+
+    @property
     def mhc_domain(self):
         if self._mhc_domain is None and self.bind_target == EpitopeTargetComponent.MHC:
             self._mhc_domain = self._create_mhc_domain()
@@ -223,15 +297,16 @@ class EpitopeTargetDataset(Dataset):
     def __getitem__(self, index):
         row = self._get_row(index)
         epitope_seq = row[CN.epitope_seq]
-        epitope_len = row[CN.epitope_len]
+        orig_epitope_seq = row[CN.orig_epitope_seq]
         if self.bind_target == EpitopeTargetComponent.MHC:
-            mhc_allele = row[CN.mhc_allele]
-            target_seq = self.mhc_domain.contact_site_seq(mhc_allele, pep_len=epitope_len)
+            target_seq = row[CN.mhc_seq]
+            orig_target_seq = row[CN.orig_mhc_seq]
         else:
             target_seq = row[CN.cdr3b_seq]
+            orig_target_seq = row[CN.orig_cdr3b_seq]
 
         binder = 1 if row[CN.bind_level] > 0 else 0
-        return epitope_seq, target_seq, binder
+        return (epitope_seq, target_seq), (orig_epitope_seq, orig_target_seq), binder
 
     def _get_row(self, index):
         return self.df.iloc[index, :]
@@ -244,17 +319,18 @@ class EpitopeTargetDataset(Dataset):
             logger.info(f'Loading data frame with config: {self.config}, args: {args}')
             df = self._load_df(args)
 
+            # Mutate epitope and target sequences
+            if self.seq_mutator:
+                logger.info(f'Mutating epitope and target sequences')
+                df = self.seq_mutator.mutate(df, args)
+                logger.info(f'After mutation, df.shape: {df.shape}')
+
             # Apply filters if necessary
             if self.filters:
                 for cur in self.filters:
                     logger.info(f'Applying filter: {cur}')
                     df = cur.filter(df)
                     logger.info(f'After filtering, df.shape: {df.shape}')
-
-            # Shuffle data
-            # if self.config.get('shuffle', True):
-            #     logger.info(f'Shuffling data, df.shape: {df.shape}')
-            #     df = df.sample(frac=1)
 
             logger.info(f'Done to load data frame. Saving to {self.fn_output_csv}, df.shape: {df.shape}')
             self.df = df
@@ -390,9 +466,18 @@ class EpitopeTargetDataset(Dataset):
             filters.append(self.MoreThanCDR3bNumberFilter(cutoff=self.config['n_cdr3b_cutoff']))
         return filters
 
-    # def _create_encoder(self):
-    #     logger.info(f"Creating encoder with config: {self.config['encoder']}")
-    #     return ProteinSeqEncoder.load_encoder(config=self.config['encoder'], check_aacodes=IupacAminoAcid.codes())
+    def _create_seq_mutator(self):
+        if 'seq_mutator' in self.config:
+            mut_config = copy.deepcopy(self.config['seq_mutator'].get('epitope'))
+            epitope_seq_mutator = eval(mut_config.pop('type'))(**mut_config) if mut_config else None
+            mut_config = copy.deepcopy(self.config['seq_mutator'].get('target'))
+            target_seq_mutator = eval(mut_config.pop('type'))(**mut_config) if mut_config else None
+            return self.EpitopeTargetSeqMutator(epitope_seq_mutator=epitope_seq_mutator,
+                                                target_seq_mutator=target_seq_mutator,
+                                                bind_target=self.bind_target,
+                                                n_mutations=self.config['seq_mutator'].get('n_mutations', 1))
+        else:
+            return None
 
     def _create_mhc_domain(self):
         mhc_css = self.config.get('mhc_css', [(9, 'netmhcpan_mhci_9')])
@@ -518,6 +603,8 @@ class IEDBEpitopeMHCDataset(EpitopeTargetDataset):
 
         logger.debug('Converting to standard allele name')
         df[CN.mhc_allele] = df['Allele Name'].str.strip().map(MHCAlleleName.std_name)
+        df[CN.mhc_seq] = None
+        df[CN.orig_mhc_seq] = None
         logger.debug('Current df.shape: %s' % str(df.shape))
 
         logger.debug('Dropping mutant alleles')
@@ -542,6 +629,7 @@ class IEDBEpitopeMHCDataset(EpitopeTargetDataset):
         df = df[
             df[CN.epitope_seq].map(lambda x: is_valid_aaseq(x))
         ]
+        df[CN.orig_epitope_seq] = df[CN.epitope_seq]
         df[CN.epitope_len] = df[CN.epitope_seq].map(lambda x: len(x))
         logger.debug('Current df.shape: %s' % str(df.shape))
 
@@ -743,13 +831,17 @@ class ShomuradovaEpitopeTCRDataset(EpitopeTargetDataset):
         logger.debug('Current df.shape: %s' % str(df.shape))
 
         df[CN.epitope_seq] = df['Epitope'].str.strip().str.upper()
+        df[CN.orig_epitope_seq] = df[CN.epitope_seq]
         df[CN.epitope_gene] = df['Epitope gene']
         df[CN.epitope_species] = df['Epitope species']
         df[CN.epitope_len] = df[CN.epitope_seq].map(lambda x: len(x))
         df[CN.epitope_start] = None
         df[CN.epitope_end] = None
         df[CN.mhc_allele] = df['MHC A']
+        df[CN.mhc_seq] = None
+        df[CN.orig_mhc_seq] = None
         df[CN.cdr3b_seq] = df['CDR3'].str.strip().str.upper()
+        df[CN.orig_cdr3b_seq] = df[CN.cdr3b_seq]
         df[CN.cdr3b_len] = df[CN.cdr3b_seq].map(len)
         df[CN.source] = 'Shomuradova'
         df[CN.ref_id] = 'PMID:33326767'
@@ -1041,6 +1133,9 @@ class TCRdbEpitopeTCRDataset(EpitopeTargetDataset):
 
 
 class ConcatEpitopeTargetDataset(EpitopeTargetDataset):
+    def __init__(self, config=None):
+        super().__init__(config=config)
+
     @property
     def bind_target(self):
         return EpitopeTargetComponent.from_str(self.config['bind_target'])
@@ -1056,23 +1151,17 @@ class ConcatEpitopeTargetDataset(EpitopeTargetDataset):
 class EpitopeTargetMaskedLMCollator:
     def __init__(self,
                  tokenizer=None,
-                 epitope_seq_mutator=None,
-                 target_seq_mutator=None,
                  max_epitope_len=None,
                  max_target_len=None,
                  has_sep=False):
         """
         Epitope and target sequence collator
         :param tokenizer: transformers.PreTrainedTokenizer
-        :param epitope_seq_mutator: epitope sequence mutator
-        :param target_seq_mutator: target sequence mutator
         :param max_epitope_len: max length of epitope sequence
         :param max_target_len: max length of target sequence
         :param has_sep: is whether has separator between epitope and target sequence
         """
         self.tokenizer = tokenizer
-        self.epitope_seq_mutator = epitope_seq_mutator
-        self.target_seq_mutator = target_seq_mutator
         self.has_sep = has_sep
         self.max_len = self._get_max_len(max_epitope_len, max_target_len)
 
@@ -1082,18 +1171,14 @@ class EpitopeTargetMaskedLMCollator:
 
     def __call__(self, batch):
         seqs = []
-        muted_seqs = []
-        for epitope_seq, target_seq, _ in batch:
+        orig_seqs = []
+        for (epitope_seq, target_seq), (orig_epitope_seq, orig_target_seq), _ in batch:
             seqs.append(self.format_seqs(epitope_seq, target_seq))
-            muted_epitope_seq = self._get_mutated_seq(epitope_seq,
-                                                      self.epitope_seq_mutator) if self.epitope_seq_mutator else epitope_seq
+            orig_seqs.append(self.format_seqs(orig_epitope_seq if pd.notnull(orig_epitope_seq) else epitope_seq,
+                                              orig_target_seq) if pd.notnull(orig_target_seq) else target_seq)
 
-            muted_target_seq = self._get_mutated_seq(target_seq,
-                                                     self.target_seq_mutator) if self.target_seq_mutator else target_seq
-            muted_seqs.append(self.format_seqs(muted_epitope_seq, muted_target_seq))
-
-        inputs = self.encode(muted_seqs)
-        targets = self.encode(seqs)
+        inputs = self.encode(seqs)
+        targets = self.encode(orig_seqs)
 
         input_ids = inputs['input_ids']
         target_ids = targets['input_ids']
@@ -1101,7 +1186,10 @@ class EpitopeTargetMaskedLMCollator:
         return inputs
 
     def format_seqs(self, epitope_seq, target_seq):
-        return f"{epitope_seq}{self.sep_token if self.has_sep else ''}{target_seq}"
+        return f"{self.gap2mask(epitope_seq)}{self.sep_token if self.has_sep else ''}{self.gap2mask(target_seq)}"
+
+    def gap2mask(self, seq):
+        return seq.replace(GAP, self.tokenizer.mask_token)
 
     def encode(self, seqs):
         return self.tokenizer(seqs,
@@ -1328,13 +1416,10 @@ class DatasetTestFixture:
             else:
                 return DataLoader(ds, batch_size=batch_size, shuffle=shuffle, num_workers=n_workers)
         elif key == 'epitope_target':
-            ds = EpitopeTargetDataset.from_key('immunecode')
+            ds = EpitopeTargetDataset.from_key('immunecode_mutated')
             plm_name_or_path = '../output/peft_esm2_t33_650M_UR50D'
             tokenizer = AutoTokenizer.from_pretrained(plm_name_or_path)
-            seq_mutator = UniformAASeqMutator(mut_ratio=0.2, mut_probs=(1, 0))
             collator = EpitopeTargetMaskedLMCollator(tokenizer=tokenizer,
-                                                     epitope_seq_mutator=None,
-                                                     target_seq_mutator=seq_mutator,
                                                      max_epitope_len=ds.max_epitope_len,
                                                      max_target_len=ds.max_target_len)
             if val_size:
@@ -1353,33 +1438,38 @@ class EpitopeTargetMaskedLMCollatorTest(BaseTest):
         super().setUp()
 
         EpitopeTargetDataset.FN_DATA_CONFIG = '../config/data-test.json'
-        self.ds = EpitopeTargetDataset.from_key('immunecode')
+        self.ds = EpitopeTargetDataset.from_key('immunecode_mutated')
         self.plm_name_or_path = '../output/peft_esm2_t33_650M_UR50D'
         self.tokenizer = AutoTokenizer.from_pretrained(self.plm_name_or_path)
-        self.seq_mutator = UniformAASeqMutator(mut_ratio=0.2, mut_probs=(0.7, 0.3))
         self.collator = EpitopeTargetMaskedLMCollator(tokenizer=self.tokenizer,
-                                                      epitope_seq_mutator=self.seq_mutator,
-                                                      target_seq_mutator=None,
                                                       max_epitope_len=self.ds.max_epitope_len,
                                                       max_target_len=self.ds.max_target_len)
 
-    def test_call(self):
+    def test_call_for_mutated(self):
+        self.assertTrue(self.ds.is_mutated)
         inputs = [self.ds[i] for i in range(len(self.ds))]
         outputs = self.collator(inputs)
+        self.assert_outputs_for_inputs(inputs=inputs, outputs=outputs)
 
-        seqs = [self.collator.format_seqs(epitope_seq, target_seq) for epitope_seq, target_seq, _ in inputs]
-        target_ids = self.collator.encode(seqs)['input_ids']
+    def assert_outputs_for_inputs(self, inputs=None, outputs=None):
+        seqs = []
+        orig_seqs = []
+        for (epitope_seq, target_seq), (orig_epitope_seq, orig_target_seq), _ in inputs:
+            seqs.append(self.collator.format_seqs(epitope_seq, target_seq))
+            orig_seqs.append(self.collator.format_seqs(orig_epitope_seq, orig_target_seq))
+
+        target_ids = self.collator.encode(orig_seqs)['input_ids']
 
         input_ids = outputs['input_ids']
         attention_mask = outputs['attention_mask']
         labels = outputs['labels']
-        expected = (len(self.ds), self.collator.max_len)
+        expected = (len(inputs), self.collator.max_len)
         self.assertEqual(expected, input_ids.shape)
         self.assertEqual(expected, attention_mask.shape)
         self.assertEqual(expected, labels.shape)
         self.assertEqual(expected, target_ids.shape)
 
-        for i in range(len(self.ds)):
+        for i in range(len(inputs)):
             for j in range(self.collator.max_len):
                 input_id = input_ids[i, j]
                 target_id = target_ids[i, j]
@@ -1388,76 +1478,41 @@ class EpitopeTargetMaskedLMCollatorTest(BaseTest):
                 else:
                     self.assertNotEqual(input_id, target_id)
 
+        self.assertArrayEqual([s.replace(self.tokenizer.mask_token, '') for s in seqs], self.get_decoded_seqs(input_ids))
+        self.assertArrayEqual(orig_seqs, self.get_decoded_seqs(target_ids))
 
-class EpitopeTargetDSDataLoaderTest(EpitopeTargetDatasetTest):
+    def get_decoded_seqs(self, input_ids):
+        decoded_seqs = self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)
+        decoded_seqs = list(map(lambda seq: StrUtils.rm_nonwords(seq), decoded_seqs))
+        return decoded_seqs
+
+
+class EpitopeTargetDSDataLoaderTest(EpitopeTargetMaskedLMCollatorTest):
     def setUp(self):
         super().setUp()
-        EpitopeTargetDataset.FN_DATA_CONFIG = '../config/data-test.json'
+
         self.batch_size = 64
-        self.data_loader = DatasetTestFixture.create_data_loader('epitope_target',
-                                                                 batch_size=self.batch_size,
-                                                                 shuffle=False,
-                                                                 n_workers=1)
+        self.data_loader = DataLoader(self.ds, batch_size=self.batch_size, shuffle=False, collate_fn=self.collator)
         self.real_batch_sizes = [self.batch_size] * (len(self.ds) // self.batch_size) + [len(self.ds) % self.batch_size]
 
-    @property
-    def ds(self):
-        return self.data_loader.dataset
-
-    @property
-    def collator(self):
-        return self.data_loader.collate_fn
-
-    @property
-    def tokenizer(self):
-        return self.data_loader.collate_fn.tokenizer
-
-    @property
     def first_batch(self):
         return next(iter(self.data_loader))
 
-    def assert_batch(self, batch_idx, batch):
-        mut_ratio = 0.2
-        mut_probs = (1, 0)
-        self.collator.epitope_seq_mutator = None
-        self.collator.target_seq_mutator.mut_ratio = mut_ratio
-        self.collator.target_seq_mutator.mut_probs = mut_probs
-
-        cur_batch_size = self.real_batch_sizes[batch_idx]
-        expected_shape = (cur_batch_size, self.collator.max_len)
-
-        input_ids, attention_mask, labels = batch['input_ids'], batch['attention_mask'], batch['labels']
+    def assert_a_batch(self, batch_idx, batch):
         begin = batch_idx * self.batch_size
         end = (batch_idx + 1) * self.batch_size
-        epitope_seqs = self.ds.df[CN.epitope_seq].values[begin:end]
-        target_seqs = self.ds.df[CN.cdr3b_seq].values[begin:end]
+        end = min(end, len(self.ds))
+        inputs = [self.ds[i] for i in range(begin, end)]
+        self.assert_outputs_for_inputs(inputs=inputs, outputs=batch)
 
-        self.assertEqual(expected_shape, input_ids.shape)
-        self.assertEqual(expected_shape, attention_mask.shape)
-        self.assertEqual(expected_shape, labels.shape)
-
-        mask_token_id = self.tokenizer.mask_token_id
-        for i in range(cur_batch_size):
-            expected_n_masks = round(len(target_seqs[i]) * mut_ratio)
-            self.assertTrue(sum(input_ids[i] == mask_token_id) == expected_n_masks)
-            self.assertArrayEqual(attention_mask[i], (input_ids[i] != self.tokenizer.pad_token_id).int())
-            self.assertTrue(sum(labels[i] != -100), len(labels[i]) - expected_n_masks)
-
-        orig_token_ids = torch.where(input_ids != mask_token_id, input_ids, labels)
-
-        decoded_seqs = self.tokenizer.batch_decode(orig_token_ids, skip_special_tokens=True)
-        decoded_seqs = list(map(lambda seq: StrUtils.rm_nonwords(seq), decoded_seqs))
-        expected_seqs = [self.collator.format_seqs(e_seq, t_seq)
-                         for e_seq, t_seq in zip(epitope_seqs, target_seqs)]
-        self.assertArrayEqual(expected_seqs, decoded_seqs)
-
-    def test_a_batch(self):
-        self.assert_batch(0, self.first_batch)
+    def test_first_batch(self):
+        batch = self.first_batch()
+        self.assert_a_batch(0, batch)
 
     def test_all_batches(self):
         for i, batch in enumerate(self.data_loader):
             print(f'>>>batch: {i}, batch_size: {self.real_batch_sizes[i]}')
-            self.assert_batch(i, batch)
+            self.assert_a_batch(i, batch)
 
 
 if __name__ == '__main__':

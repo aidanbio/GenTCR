@@ -54,15 +54,15 @@ def run_task(args):
 
 def main():
     parser = ArgumentParser('gentcr')
-    parser.add_argument('--log_level', type=str, default='DEBUG')
+    parser.add_argument('--log_level', type=str, default='INFO')
     subparsers = parser.add_subparsers()
 
     # Arguments for sub command 'generate_datasets'
     sub_parser = subparsers.add_parser('generate_datasets')
     sub_parser.set_defaults(func=generate_datasets)
-    sub_parser.add_argument('--data_config', type=str, default='../config/data.json')
+    sub_parser.add_argument('--data_config', type=str, default='../config/data-test.json')
     sub_parser.add_argument('--data', type=str, default='shomuradova_minervina_gfeller')
-    sub_parser.add_argument('--n_workers', type=int, default=1)
+    sub_parser.add_argument('--n_workers', type=int, default=20)
 
     # Arguments for sub command 'run_task'
     sub_parser = subparsers.add_parser('run_task')

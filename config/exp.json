@@ -13,20 +13,8 @@
         },
         "data": {
           "config": "../config/data-test.json",
-          "data_key": "immunecode",
-          "val_size": 0.2,
-          "seq_mutators": {
-            "epitope": {
-              "type": "calis",
-              "mut_ratio": 0.15,
-              "mut_probs": [0.7, 0.3]
-            },
-            "target": {
-              "type": "uniform",
-              "mut_ratio": 0.2,
-              "mut_probs": [0.8, 0.2]
-            }
-          }
+          "data_key": "immunecode_mutated",
+          "val_size": 0.2
         },
         "trainer": {
           "args": {
@@ -261,7 +249,7 @@
   },
   "exp4": {
     "title": "exp4",
-    "description": "Mutation ratio: 0.15 and 0.15 for epitope and TCR CDR3beta sequences respectively",
+    "description": "Mutation ratio: 0.2 for both epitope and TCR CDR3beta sequences",
     "paper": "ASAP",
     "output_dir": "../output/exp4",
     "taskflow": {
@@ -273,28 +261,16 @@
         },
         "data": {
           "config": "../config/data.json",
-          "data_key": "immunecode",
-          "val_size": 0.2,
-          "seq_mutators": {
-            "epitope":{
-              "type": "calis",
-              "mut_ratio": 0.15,
-              "mut_probs": [0.8, 0.2]
-            },
-            "target":{
-              "type": "uniform",
-              "mut_ratio": 0.15,
-              "mut_probs": [0.8, 0.2]
-            }
-          }
+          "data_key": "immunecode_mutated",
+          "val_size": 0.2
         },
         "trainer": {
           "args": {
             "dataloader_num_workers": 24,
             "dataloader_pin_memory": true,
-            "per_device_train_batch_size": 2048,
-            "per_device_eval_batch_size": 2048,
-            "gradient_accumulation_steps": 4,
+            "per_device_train_batch_size": 4048,
+            "per_device_eval_batch_size": 4048,
+            "gradient_accumulation_steps": 2,
             "gradient_checkpointing": true,
             "lr_scheduler_type": "polynomial",
             "warmup_ratio": 0.2,

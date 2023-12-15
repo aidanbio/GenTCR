@@ -30,6 +30,28 @@
       "nodup": true,
       "query": "(cdr3b_len >= 8) and (cdr3b_len <= 23)"
     },
+    "immunecode_mutated": {
+      "type": "ConcatEpitopeTargetDataset",
+      "bind_target": "tcr",
+      "datasets": [
+        "immunecode"
+      ],
+      "seq_mutator": {
+        "epitope":{
+          "type": "CalisImmunogenicAASeqMutator",
+          "mut_ratio": 0.2,
+          "mut_probs": [0.8, 0.2]
+        },
+        "target":{
+          "type": "UniformAASeqMutator",
+          "mut_ratio": 0.2,
+          "mut_probs": [0.8, 0.2]
+        },
+        "n_mutations": 5
+      },
+      "nodup": true
+    },
+
     "immunecode_9mer": {
       "type": "ImmuneCODEEpitopeTargetDataset",
       "bind_target": "tcr",
