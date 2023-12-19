@@ -60,8 +60,8 @@ def main():
     # Arguments for sub command 'generate_datasets'
     sub_parser = subparsers.add_parser('generate_datasets')
     sub_parser.set_defaults(func=generate_datasets)
-    sub_parser.add_argument('--data_config', type=str, default='../config/data-test.json')
-    sub_parser.add_argument('--data', type=str, default='shomuradova_minervina_gfeller')
+    sub_parser.add_argument('--data_config', type=str, default='../config/data.json')
+    sub_parser.add_argument('--data', type=str, default='immunecode_mutated')
     sub_parser.add_argument('--n_workers', type=int, default=20)
 
     # Arguments for sub command 'run_task'

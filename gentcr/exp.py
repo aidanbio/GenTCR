@@ -123,11 +123,13 @@ class Experiment(object):
             plm_name_or_path = self.config['plm_name_or_path']
             logger.info(f'Start loading pretrained model from {plm_name_or_path}')
             bits = self.config['peft'].get('bits', 4)
+            use_flash_attentionz_2 = self.config['peft'].get('use_flash_attention_2', False)
             model = AutoModelForMaskedLM.from_pretrained(plm_name_or_path,
                                                          quantization_config=create_bnb_config(bits=bits),
                                                          # load_in_8bit=(bits == 8),
                                                          # load_in_4bit=(bits == 4),
                                                          # torch_dtype=torch.bfloat16,
+                                                         use_flash_attention_2=use_flash_attentionz_2,
                                                          device_map="auto")
             # Using the prepare_model_for_kbit_training method from PEFT
             model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=model.supports_gradient_checkpointing)

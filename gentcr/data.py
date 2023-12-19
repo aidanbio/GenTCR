@@ -332,6 +332,12 @@ class EpitopeTargetDataset(Dataset):
                     df = cur.filter(df)
                     logger.info(f'After filtering, df.shape: {df.shape}')
 
+            # Shuffle data
+            if self.config.get('shuffle', False):
+                logger.info(f'Shuffling data')
+                df = df.sample(frac=1)
+                logger.info(f'After shuffling, df.shape: {df.shape}')
+
             logger.info(f'Done to load data frame. Saving to {self.fn_output_csv}, df.shape: {df.shape}')
             self.df = df
             self.save_csv()
@@ -604,7 +610,7 @@ class IEDBEpitopeMHCDataset(EpitopeTargetDataset):
         logger.debug('Converting to standard allele name')
         df[CN.mhc_allele] = df['Allele Name'].str.strip().map(MHCAlleleName.std_name)
         df[CN.mhc_seq] = None
-        df[CN.orig_mhc_seq] = None
+        df[CN.orig_mhc_seq] = df[CN.mhc_seq]
         logger.debug('Current df.shape: %s' % str(df.shape))
 
         logger.debug('Dropping mutant alleles')
@@ -640,6 +646,7 @@ class IEDBEpitopeMHCDataset(EpitopeTargetDataset):
         df[CN.epitope_start] = df['Starting Position']
         df[CN.epitope_end] = df['Ending Position']
         df[CN.cdr3b_seq] = None
+        df[CN.orig_cdr3b_seq] = df[CN.cdr3b_seq]
         df[CN.ref_id] = df['PubMed ID'].map(lambda x: ('PMID:%s' % x) if x else None)
         df[CN.source] = 'IEDB'
         df[CN.bind_level] = df.apply(lambda row: get_bind_level(row, assay_type), axis=1)
@@ -683,11 +690,15 @@ class DashEpitopeTCRDataset(EpitopeTargetDataset):
         df[CN.epitope_gene] = df['epitope']
         df[CN.epitope_species] = df[CN.epitope_gene].map(lambda x: self.GENE_INFO_MAP[x][0])
         df[CN.epitope_seq] = df[CN.epitope_gene].map(lambda x: self.GENE_INFO_MAP[x][1])
+        df[CN.orig_epitope_seq] = df[CN.epitope_seq]
         df[CN.epitope_len] = df[CN.epitope_seq].map(lambda x: len(x))
         df[CN.epitope_start] = None
         df[CN.epitope_end] = None
         df[CN.mhc_allele] = df[CN.epitope_gene].map(lambda x: self.GENE_INFO_MAP[x][2])
+        df[CN.mhc_seq] = None
+        df[CN.orig_mhc_seq] = df[CN.mhc_seq]
         df[CN.cdr3b_seq] = df['cdr3b'].str.strip().str.upper()
+        df[CN.orig_cdr3b_seq] = df[CN.cdr3b_seq]
         df[CN.cdr3b_len] = df[CN.cdr3b_seq].map(len)
         df[CN.source] = 'Dash'
         df[CN.ref_id] = 'PMID:28636592'
@@ -736,14 +747,18 @@ class VDJDbEpitopeTCRDataset(EpitopeTargetDataset):
         logger.debug('Current df.shape: %s' % str(df.shape))
 
         df[CN.epitope_seq] = df['antigen.epitope'].str.strip().str.upper()
+        df[CN.orig_epitope_seq] = df[CN.epitope_seq]
         df[CN.epitope_species] = df['antigen.species']
         df[CN.epitope_gene] = df['antigen.gene']
         df[CN.epitope_len] = df[CN.epitope_seq].map(lambda x: len(x))
         df[CN.epitope_start] = None
         df[CN.epitope_end] = None
         df[CN.cdr3b_seq] = df['cdr3'].str.strip().str.upper()
+        df[CN.orig_cdr3b_seq] = df[CN.cdr3b_seq]
         df[CN.cdr3b_len] = df[CN.cdr3b_seq].map(len)
         df[CN.mhc_allele] = df['mhc.a']
+        df[CN.mhc_seq] = None
+        df[CN.orig_mhc_seq] = df[CN.mhc_seq]
         df[CN.source] = 'VDJdb'
         df[CN.ref_id] = df['reference.id']
         df[CN.bind_level] = BindLevel.POSITIVE
@@ -775,6 +790,7 @@ class McPASEpitopeTCRDataset(EpitopeTargetDataset):
         logger.debug('Current df.shape: %s' % str(df.shape))
 
         df[CN.epitope_seq] = df['Epitope.peptide'].str.strip().str.upper()
+        df[CN.orig_epitope_seq] = df[CN.epitope_seq]
 
         # Handle multiple epitope
         logger.debug('Extend by multi-epitopes')
@@ -788,6 +804,7 @@ class McPASEpitopeTCRDataset(EpitopeTargetDataset):
             for epitope in tokens[1:]:
                 logger.debug('Extend by epitope: %s' % epitope)
                 subdf[CN.epitope_seq] = epitope
+                subdf[CN.orig_epitope_seq] = subdf[CN.epitope_seq]
                 df = df.append(subdf)
         logger.debug('Current df.shape: %s' % (str(df.shape)))
 
@@ -797,8 +814,11 @@ class McPASEpitopeTCRDataset(EpitopeTargetDataset):
         df[CN.epitope_start] = None
         df[CN.epitope_end] = None
         df[CN.cdr3b_seq] = df['CDR3.beta.aa'].str.strip().str.upper()
+        df[CN.orig_cdr3b_seq] = df[CN.cdr3b_seq]
         df[CN.cdr3b_len] = df[CN.cdr3b_seq].map(len)
         df[CN.mhc_allele] = df['MHC'].str.strip()
+        df[CN.mhc_seq] = None
+        df[CN.orig_mhc_seq] = df[CN.mhc_seq]
         df[CN.source] = 'McPAS'
         df[CN.ref_id] = df['PubMed.ID'].map(lambda x: '%s:%s' % ('PMID', x))
         df[CN.bind_level] = BindLevel.POSITIVE
@@ -839,7 +859,7 @@ class ShomuradovaEpitopeTCRDataset(EpitopeTargetDataset):
         df[CN.epitope_end] = None
         df[CN.mhc_allele] = df['MHC A']
         df[CN.mhc_seq] = None
-        df[CN.orig_mhc_seq] = None
+        df[CN.orig_mhc_seq] = df[CN.mhc_seq]
         df[CN.cdr3b_seq] = df['CDR3'].str.strip().str.upper()
         df[CN.orig_cdr3b_seq] = df[CN.cdr3b_seq]
         df[CN.cdr3b_len] = df[CN.cdr3b_seq].map(len)
@@ -895,9 +915,11 @@ class ImmuneCODEEpitopeTargetDataset(EpitopeTargetDataset):
                 new_row[CN.epitope_species] = 'SARS-CoV-2'
                 new_row[CN.epitope_gene] = orfs
                 new_row[CN.epitope_seq] = epitope
+                new_row[CN.orig_epitope_seq] = epitope
                 new_row[CN.epitope_len] = len(epitope)
                 new_row[CN.mhc_allele] = ALLELE_SEP.join(alleles)
                 new_row[CN.cdr3b_seq] = cdr3b
+                new_row[CN.orig_cdr3b_seq] = cdr3b
                 new_row[CN.cdr3b_len] = len(cdr3b)
                 new_row[CN.ref_id] = 'PMC:7418738'
                 new_row[CN.source] = 'ImmuneCODE_002.1'
@@ -945,13 +967,17 @@ class IEDBEpitopeTCRDataset(EpitopeTargetDataset):
         logger.debug('Current df.shape: %s' % str(df.shape))
 
         df[CN.epitope_seq] = df['Description'].str.strip().str.upper()
+        df[CN.orig_epitope_seq] = df[CN.epitope_seq]
         df[CN.epitope_gene] = df['Antigen']
         df[CN.epitope_species] = df['Organism']
         df[CN.epitope_len] = df[CN.epitope_seq].map(lambda x: len(x))
         df[CN.epitope_start] = None
         df[CN.epitope_end] = None
         df[CN.mhc_allele] = df['MHC Allele Names']
+        df[CN.mhc_seq] = None
+        df[CN.orig_mhc_seq]= df[CN.mhc_seq]
         df[CN.cdr3b_seq] = df['Chain 2 CDR3 Curated'].str.strip().str.upper()
+        df[CN.orig_cdr3b_seq] = df[CN.cdr3b_seq]
         df[CN.cdr3b_len] = df[CN.cdr3b_seq].map(len)
         df[CN.source] = 'IEDB'
         df[CN.bind_level] = BindLevel.POSITIVE
@@ -987,13 +1013,17 @@ class pMTnetEpitopeTCRDataset(EpitopeTargetDataset):
         logger.debug('Current df.shape: %s' % str(df.shape))
 
         df[CN.epitope_seq] = df['Antigen'].str.strip().str.upper()
+        df[CN.orig_epitope_seq] = df[CN.epitope_seq]
         df[CN.epitope_gene] = None
         df[CN.epitope_species] = None
         df[CN.epitope_len] = df[CN.epitope_seq].map(lambda x: len(x))
         df[CN.epitope_start] = None
         df[CN.epitope_end] = None
         df[CN.mhc_allele] = df['HLA'].str.strip().str.upper()
+        df[CN.mhc_seq] = None
+        df[CN.orig_mhc_seq] = df[CN.mhc_seq]
         df[CN.cdr3b_seq] = df['CDR3'].str.strip().str.upper()
+        df[CN.orig_cdr3b_seq] = df[CN.cdr3b_seq]
         df[CN.cdr3b_len] = df[CN.cdr3b_seq].map(len)
         df[CN.source] = 'pMTnet'
         df[CN.ref_id] = 'lu2021deep'
@@ -1027,13 +1057,17 @@ class GfellerEpitopeTCRDataset(EpitopeTargetDataset):
             df['Chain'] == 'B'
             ]
         df[CN.epitope_seq] = df['PeptideSequence'].str.strip().str.upper()
+        df[CN.orig_epitope_seq] = df[CN.epitope_seq]
         df[CN.epitope_gene] = None
         df[CN.epitope_species] = None
         df[CN.epitope_len] = df[CN.epitope_seq].map(lambda x: len(x))
         df[CN.epitope_start] = None
         df[CN.epitope_end] = None
         df[CN.mhc_allele] = df['Info'].str.strip().str.upper()
+        df[CN.mhc_seq] = None
+        df[CN.orig_mhc_seq] = df[CN.mhc_seq]
         df[CN.cdr3b_seq] = df['CDR3'].str.strip().str.upper()
+        df[CN.orig_cdr3b_seq] = df[CN.cdr3b_seq]
         df[CN.cdr3b_len] = df[CN.cdr3b_seq].map(len)
         df[CN.source] = 'Gfeller'
         df[CN.ref_id] = '{Gfeller,2023}}'
@@ -1094,8 +1128,12 @@ class TCRdbEpitopeTCRDataset(EpitopeTargetDataset):
                     df_tmp['AASeq'].map(lambda x: is_valid_aaseq(x))
                 ]
                 df_tmp[CN.epitope_seq] = pseudo_epitope
+                df_tmp[CN.orig_epitope_seq] = df_tmp[CN.epitope_seq]
                 df_tmp[CN.epitope_len] = len(pseudo_epitope)
+                df_tmp[CN.mhc_seq] = None
+                df_tmp[CN.orig_mhc_seq] = df_tmp[CN.mhc_seq]
                 df_tmp[CN.cdr3b_seq] = df_tmp['AASeq']
+                df_tmp[CN.orig_cdr3b_seq] = df_tmp[CN.cdr3b_seq]
                 df_tmp[CN.cdr3b_len] = df_tmp[CN.cdr3b_seq].map(len)
                 df_tmp[CN.ref_id] = 'PMC:7418738'
                 df_tmp[CN.source] = 'TCRdb'

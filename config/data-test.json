@@ -39,17 +39,18 @@
       "seq_mutator": {
         "epitope":{
           "type": "CalisImmunogenicAASeqMutator",
-          "mut_ratio": 0.2,
-          "mut_probs": [0.8, 0.2]
+          "mut_ratio": 0.15,
+          "mut_probs": [0.8, 0.1]
         },
         "target":{
           "type": "UniformAASeqMutator",
-          "mut_ratio": 0.2,
-          "mut_probs": [0.8, 0.2]
+          "mut_ratio": 0.15,
+          "mut_probs": [0.8, 0.1]
         },
-        "n_mutations": 5
+        "n_mutations": 3
       },
-      "nodup": true
+      "nodup": true,
+      "shuffle": true
     },
     "immunecode_9mer": {
       "type": "ImmuneCODEEpitopeTargetDataset",
@@ -98,6 +99,28 @@
       "datasets": [
         "shomuradova", "minervina", "gfeller"
       ],
+      "nodup": true
+    },
+    "smg_mutated": {
+      "type": "ConcatEpitopeTargetDataset",
+      "bind_target": "tcr",
+      "description": "Combined epitope-specific CDR3b data from {Shomuradova,2021}, {Minervina,2022}, and {Gfeller,2023}",
+      "datasets": [
+        "shomuradova", "minervina", "gfeller"
+      ],
+      "seq_mutator": {
+        "epitope":{
+          "type": "CalisImmunogenicAASeqMutator",
+          "mut_ratio": 0.15,
+          "mut_probs": [0.8, 0.2]
+        },
+        "target":{
+          "type": "UniformAASeqMutator",
+          "mut_ratio": 0.5,
+          "mut_probs": [0.8, 0.2]
+        },
+        "n_mutations": 1
+      },
       "nodup": true
     },
     "tcrdb_pos": {

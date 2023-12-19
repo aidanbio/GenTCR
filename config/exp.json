@@ -9,7 +9,8 @@
         "type": "mlm_finetune",
         "plm_name_or_path": "facebook/esm2_t33_650M_UR50D",
         "peft": {
-          "bits": 8
+          "bits": 8,
+          "use_flash_attention_2": false
         },
         "data": {
           "config": "../config/data-test.json",
@@ -249,7 +250,7 @@
   },
   "exp4": {
     "title": "exp4",
-    "description": "Mutation ratio: 0.2 for both epitope and TCR CDR3beta sequences",
+    "description": "Mutation ratio: 0.15 for both epitope and TCR CDR3beta sequences",
     "paper": "ASAP",
     "output_dir": "../output/exp4",
     "taskflow": {
@@ -257,7 +258,8 @@
         "type": "mlm_finetune",
         "plm_name_or_path": "facebook/esm2_t33_650M_UR50D",
         "peft": {
-          "bits": 8
+          "bits": 8,
+          "use_flash_attention_2": true
         },
         "data": {
           "config": "../config/data.json",
@@ -268,9 +270,9 @@
           "args": {
             "dataloader_num_workers": 24,
             "dataloader_pin_memory": true,
-            "per_device_train_batch_size": 4096,
-            "per_device_eval_batch_size": 4096,
-            "gradient_accumulation_steps": 4,
+            "per_device_train_batch_size": 8192,
+            "per_device_eval_batch_size": 8192,
+            "gradient_accumulation_steps": 2,
             "gradient_checkpointing": true,
             "lr_scheduler_type": "polynomial",
             "warmup_ratio": 0.2,
