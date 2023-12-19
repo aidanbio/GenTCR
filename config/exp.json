@@ -277,7 +277,7 @@
             "lr_scheduler_type": "polynomial",
             "warmup_ratio": 0.2,
             "weight_decay": 0.01,
-            "num_train_epochs": 50,
+            "num_train_epochs": 30,
             "learning_rate": 2e-4,
             "fp16": true,
             "evaluation_strategy": "steps",
@@ -295,7 +295,7 @@
           "callbacks": [
             {
               "type": "EarlyStoppingCallback",
-              "early_stopping_patience": 5
+              "early_stopping_patience": 3
             }
           ]
         }
