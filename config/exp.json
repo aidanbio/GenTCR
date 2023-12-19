@@ -259,7 +259,7 @@
         "plm_name_or_path": "facebook/esm2_t33_650M_UR50D",
         "peft": {
           "bits": 8,
-          "use_flash_attention_2": true
+          "use_flash_attention_2": false
         },
         "data": {
           "config": "../config/data.json",
