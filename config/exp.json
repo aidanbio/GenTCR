@@ -9,13 +9,24 @@
         "type": "mlm_finetune",
         "plm_name_or_path": "facebook/esm2_t33_650M_UR50D",
         "peft": {
-          "bits": 8,
-          "use_flash_attention_2": false
+          "bits": 8
         },
         "data": {
           "config": "../config/data-test.json",
-          "data_key": "immunecode_mutated",
-          "val_size": 0.2
+          "data_key": "immunecode",
+          "val_size": 0.2,
+          "seq_mutators": {
+            "epitope": {
+              "type": "calis",
+              "mut_ratio": 0.15,
+              "mut_probs": [0.7, 0.3]
+            },
+            "target": {
+              "type": "uniform",
+              "mut_ratio": 0.15,
+              "mut_probs": [0.8, 0.2]
+            }
+          }
         },
         "trainer": {
           "args": {
@@ -258,26 +269,37 @@
         "type": "mlm_finetune",
         "plm_name_or_path": "facebook/esm2_t33_650M_UR50D",
         "peft": {
-          "bits": 8,
-          "use_flash_attention_2": false
+          "bits": 8
         },
         "data": {
           "config": "../config/data.json",
-          "data_key": "immunecode_mutated",
-          "val_size": 0.2
+          "data_key": "immunecode",
+          "val_size": 0.2,
+          "seq_mutators": {
+            "epitope":{
+              "type": "calis",
+              "mut_ratio": 0.15,
+              "mut_probs": [0.7, 0.3]
+            },
+            "target":{
+              "type": "uniform",
+              "mut_ratio": 0.15,
+              "mut_probs": [0.7, 0.3]
+            }
+          }
         },
         "trainer": {
           "args": {
             "dataloader_num_workers": 24,
             "dataloader_pin_memory": true,
-            "per_device_train_batch_size": 4096,
-            "per_device_eval_batch_size": 4096,
+            "per_device_train_batch_size": 2048,
+            "per_device_eval_batch_size": 2048,
             "gradient_accumulation_steps": 4,
             "gradient_checkpointing": true,
             "lr_scheduler_type": "polynomial",
             "warmup_ratio": 0.2,
             "weight_decay": 0.01,
-            "num_train_epochs": 30,
+            "num_train_epochs": 50,
             "learning_rate": 2e-4,
             "fp16": true,
             "evaluation_strategy": "steps",
@@ -295,7 +317,7 @@
           "callbacks": [
             {
               "type": "EarlyStoppingCallback",
-              "early_stopping_patience": 3
+              "early_stopping_patience": 5
             }
           ]
         }

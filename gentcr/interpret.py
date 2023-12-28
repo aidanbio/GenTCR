@@ -106,7 +106,7 @@ class EsmMLMAttrInterpreter:
 
 class EsmMLMAttrInterpreterTest(unittest.TestCase):
     def setUp(self):
-        self.mlm_name_or_path = '../output/exp4/mlm_finetune'
+        self.mlm_name_or_path = '../output/exp3/mlm_finetune'
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.model, self.tokenizer = self.load_model_and_tokenizer(self.mlm_name_or_path)
         self.model = self.model.to(self.device)
@@ -142,7 +142,7 @@ class EsmMLMAttrInterpreterTest(unittest.TestCase):
         self.assertEqual(clone.config, self.model.config)
 
     def test_layer_conductance_attrs(self):
-        self.collator.epitope_seq_mutator.mut_positions = [2]
+        self.collator.epitope_seq_mutator.mut_positions = [3]
         inputs = self.first_batch(batch_size=1)
         input_ids = inputs['input_ids']
         print(f'Masked input[0]: {self.tokenizer.decode(input_ids[0])}')

@@ -1,6 +1,6 @@
 {
   "basedir": "../output",
-  "output_csv_pattern": "{name}.sample.data.csv",
+  "output_csv_pattern": "{name}.data.csv",
   "ds_map": {
     "dash": {
       "type": "DashEpitopeTCRDataset",
@@ -25,22 +25,46 @@
     "immunecode": {
       "type": "ImmuneCODEEpitopeTargetDataset",
       "bind_target": "tcr",
-      "fn": "../data/ImmuneCODE-MIRA-Release002.1/peptide-detail-ci.sample.csv",
+      "fn": "../data/ImmuneCODE-MIRA-Release002.1/peptide-detail-ci.csv",
       "fn_subject": "../data/ImmuneCODE-MIRA-Release002.1/subject-metadata.csv",
       "nodup": true,
       "query": "(cdr3b_len >= 8) and (cdr3b_len <= 23)"
     },
+    "immunecode_mutated": {
+      "type": "ConcatEpitopeTargetDataset",
+      "bind_target": "tcr",
+      "datasets": [
+        "immunecode"
+      ],
+      "seq_mutator": {
+        "epitope":{
+          "type": "CalisImmunogenicAASeqMutator",
+          "mut_ratio": 0.15,
+          "mut_probs": [0.8, 0.1]
+        },
+        "target":{
+          "type": "UniformAASeqMutator",
+          "mut_ratio": 0.15,
+          "mut_probs": [0.8, 0.1]
+        },
+        "n_mutations": 3
+      },
+      "nodup": true,
+      "shuffle": true
+    },
+
     "immunecode_9mer": {
       "type": "ImmuneCODEEpitopeTargetDataset",
       "bind_target": "tcr",
-      "fn": "../data/ImmuneCODE-MIRA-Release002.1/peptide-detail-ci.sample.csv",
+      "fn": "../data/ImmuneCODE-MIRA-Release002.1/peptide-detail-ci.csv",
       "fn_subject": "../data/ImmuneCODE-MIRA-Release002.1/subject-metadata.csv",
       "nodup": true,
       "query": "(epitope_len == 9) and (cdr3b_len >= 8) and (cdr3b_len <= 23)"
     },
+
     "iedb_tcr": {
       "type": "IEDBEpitopeTCRDataset",
-      "fn": "../data/IEDB/receptor_full_v3.sample.csv"
+      "fn": "../data/IEDB/receptor_full_v3.csv"
     },
     "iedb_tcr_sars2": {
       "type": "IEDBEpitopeTCRDataset",
@@ -79,16 +103,48 @@
       ],
       "nodup": true
     },
+    "smg_mutated": {
+      "type": "ConcatEpitopeTargetDataset",
+      "bind_target": "tcr",
+      "description": "Combined epitope-specific CDR3b data from {Shomuradova,2021}, {Minervina,2022}, and {Gfeller,2023}",
+      "datasets": [
+        "shomuradova", "minervina", "gfeller"
+      ],
+      "seq_mutator": {
+        "epitope":{
+          "type": "CalisImmunogenicAASeqMutator",
+          "mut_ratio": 0.15,
+          "mut_probs": [0.8, 0.2]
+        },
+        "target":{
+          "type": "UniformAASeqMutator",
+          "mut_ratio": 0.5,
+          "mut_probs": [0.8, 0.2]
+        },
+        "n_mutations": 1
+      },
+      "nodup": true
+    },
     "tcrdb_pos": {
       "type": "TCRdbEpitopeTCRDataset",
       "baseurl": "http://bioinfo.life.hust.edu.cn/TCRdb/Download",
       "project_ids": [
-        "PRJNA280417", "PRJNA506151"
+        "PRJNA330606", "PRJNA393498", "PRJNA280417", "PRJNA506151", "PRJNA321261", "PRJNA312319",
+        "PRJNA325496", "PRJNA395098", "PRJNA390125", "PRJNA301507", "PRJNA316033", "PRJNA427746",
+        "PRJNA79519", "PRJNA325416", "PRJNA203441", "PRJNA229070", "PRJEB33490", "PRJNA312766",
+        "PRJNA79707", "PRJNA298417", "PRJNA297261", "PRJNA385561", "PRJNA491656", "PRJNA318495",
+        "PRJNA318421", "PRJNA389805", "PRJNA300878", "PRJNA516984", "PRJNA510967", "PRJNA509233",
+        "PRJNA493983", "PRJNA450033", "PRJNA494572", "PRJNA391483", "PRJNA544470", "PRJNA477518",
+        "PRJNA356992", "PRJNA422601", "PRJNA273698", "PRJNA214848", "PRJNA577520", "PRJNA377207",
+        "PRJNA376866", "PRJNA389678", "PRJNA544699", "PRJNA495603", "PRJNA374973", "PRJNA412739",
+        "PRJNA329041", "PRJNA579190", "PRJNA258001", "PRJNA393071", "PRJNA315543", "PRJNA473147",
+        "PRJNA517192", "PRJNA577794", "PRJNA633317", "PRJNA516296", "PRJNA436233", "PRJNA429872",
+        "PRJEB38339", "PRJNA449605", "PRJNA208615", "PRJNA377124", "PRJNA602827"
       ],
-      "clonality_cutoff": 0.05,
+      "clonality_cutoff": 0.1,
       "pseudo_epitope": "YLQPRTFLL",
       "nodup": true,
       "query": "(bind_level > 0) and (cdr3b_len >= 8) and (cdr3b_len <= 23)"
-   }
+    }
   }
 }

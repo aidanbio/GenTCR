@@ -40,7 +40,7 @@ class Experiment(object):
             super().__init__(config=config)
 
         def _run(self, args=None):
-            logger.info(f'Start to MLMFinetuneTask.run with args: {args} and exp_config: {self.config}')
+            logger.info(f'Start to MLMFinetuneTask.run with args: {args} and config: {self.config}')
             output_dir = self.config['output_dir']
             if not os.path.exists(output_dir):
                 os.mkdir(output_dir)
@@ -123,13 +123,11 @@ class Experiment(object):
             plm_name_or_path = self.config['plm_name_or_path']
             logger.info(f'Start loading pretrained model from {plm_name_or_path}')
             bits = self.config['peft'].get('bits', 4)
-            use_flash_attentionz_2 = self.config['peft'].get('use_flash_attention_2', False)
             model = AutoModelForMaskedLM.from_pretrained(plm_name_or_path,
                                                          quantization_config=create_bnb_config(bits=bits),
                                                          # load_in_8bit=(bits == 8),
                                                          # load_in_4bit=(bits == 4),
                                                          # torch_dtype=torch.bfloat16,
-                                                         use_flash_attention_2=use_flash_attentionz_2,
                                                          device_map="auto")
             # Using the prepare_model_for_kbit_training method from PEFT
             model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=model.supports_gradient_checkpointing)
@@ -145,12 +143,33 @@ class Experiment(object):
             return model, tokenizer
 
         def _load_train_val_datasets(self, tokenizer):
+            def create_seq_mutator(mut_config=None):
+                if mut_config:
+                    mut_config = copy.deepcopy(mut_config)
+                    mutator_type = mut_config.pop('type')
+                    if mutator_type == 'uniform':
+                        return UniformAASeqMutator(**mut_config)
+                    elif mutator_type == 'calis':
+                        return CalisImmunogenicAASeqMutator(**mut_config)
+                    else:
+                        raise ValueError(f'Unsupported seq mutator type: {mutator_type}')
+                return None
+
             config = self.config['data']
             EpitopeTargetDataset.FN_DATA_CONFIG = config.get('config', '../config/data-test.json')
 
             ds = EpitopeTargetDataset.from_key(config['data_key'])
             train_ds, val_ds = ds.train_test_split(test_size=config['val_size'], shuffle=True)
+
+            epitope_seq_mutator = None
+            target_seq_mutator = None
+            if 'seq_mutators' in config:
+                epitope_seq_mutator = create_seq_mutator(config['seq_mutators'].get('epitope'))
+                target_seq_mutator = create_seq_mutator(config['seq_mutators'].get('target'))
+
             data_collator = EpitopeTargetMaskedLMCollator(tokenizer=tokenizer,
+                                                          epitope_seq_mutator=epitope_seq_mutator,
+                                                          target_seq_mutator=target_seq_mutator,
                                                           max_epitope_len=ds.max_epitope_len,
                                                           max_target_len=ds.max_target_len)
             return train_ds, val_ds, data_collator
